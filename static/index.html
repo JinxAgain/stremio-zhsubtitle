@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stremio 中文字幕聚合插件 (Zimuku & SubHD)</title>
+  <meta name="description" content="专为 Stremio 打造的高质量中文字幕插件，聚合 Zimuku 与 SubHD，自动剥离 ASS 特效乱码，提供纯净 UTF-8 SRT 字幕，支持 TV 与移动端一键安装。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #07090e;
+      --bg-surface: rgba(18, 24, 38, 0.75);
+      --bg-surface-hover: rgba(28, 36, 56, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(99, 102, 241, 0.5);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --accent: #a855f7;
+      --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --success: #10b981;
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background lighting */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -20%;
+      left: 20%;
+      width: 60vw;
+      height: 60vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+      z-index: -1;
+      filter: blur(80px);
+      pointer-events: none;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: -20%;
+      right: 15%;
+      width: 50vw;
+      height: 50vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(168, 85, 247, 0.10) 0%, transparent 70%);
+      z-index: -1;
+      filter: blur(80px);
+      pointer-events: none;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 640px;
+      background: var(--bg-surface);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 2.5rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 68px;
+      height: 68px;
+      background: var(--accent-gradient);
+      border-radius: 20px;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4);
+    }
+
+    .logo-badge svg {
+      width: 38px;
+      height: 38px;
+      fill: #ffffff;
+    }
+
+    h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.85rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .section {
+      margin-bottom: 1.75rem;
+    }
+
+    .section-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+    }
+
+    .options-grid.two-cols {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .option-card {
+      position: relative;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 0.85rem 0.75rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+    }
+
+    .option-card:hover {
+      background: var(--bg-surface-hover);
+      border-color: rgba(255, 255, 255, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .option-card input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .option-card.active {
+      background: rgba(99, 102, 241, 0.12);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+
+    .option-card .label {
+      display: block;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 2px;
+    }
+
+    .option-card .desc {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .option-card.active .label {
+      color: #818cf8;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin-top: 2rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 0.95rem 1.5rem;
+      border-radius: var(--radius-md);
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      border: none;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: var(--accent-gradient);
+      color: #ffffff;
+      box-shadow: 0 8px 20px -4px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn-primary:hover {
+      box-shadow: 0 12px 28px -4px rgba(99, 102, 241, 0.6);
+      transform: translateY(-2px);
+      filter: brightness(1.08);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .features-list {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      line-height: 1.4;
+    }
+
+    .feature-icon {
+      font-size: 1rem;
+      line-height: 1;
+      margin-top: 2px;
+    }
+
+    /* Toast alert */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #1e293b;
+      color: #ffffff;
+      padding: 0.75rem 1.25rem;
+      border-radius: 9999px;
+      font-size: 0.88rem;
+      font-weight: 500;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: none;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    @media (max-width: 540px) {
+      .container {
+        padding: 1.5rem;
+      }
+      .options-grid {
+        grid-template-columns: 1fr;
+      }
+      .features-list {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-badge">
+        <svg viewBox="0 0 24 24">
+          <path d="M4 6H20V16H4V6ZM2 4C0.89543 4 0 4.89543 0 6V16C0 17.1046 0.89543 18 2 18H8V20H16V18H22C23.1046 18 24 17.1046 24 16V6C24 4.89543 23.1046 4 22 4H2ZM6 9H18V11H6V9ZM6 12H14V14H6V12Z"/>
+        </svg>
+      </div>
+      <h1 id="main-title">中文字幕聚合插件</h1>
+      <p class="subtitle">汇聚 Zimuku 与 SubHD 优质片源 · 智能剥离 ASS 乱码 · 纯净 UTF-8 输出</p>
+    </div>
+
+    <!-- Language Selector -->
+    <div class="section">
+      <div class="section-title">
+        <span>🌐 语言排序偏好</span>
+      </div>
+      <div class="options-grid" id="lang-options">
+        <label class="option-card active" data-lang="bilingual">
+          <input type="radio" name="lang" value="bilingual" checked>
+          <span class="label">双语优先</span>
+          <span class="desc">中英/简英双语</span>
+        </label>
+        <label class="option-card" data-lang="chs">
+          <input type="radio" name="lang" value="chs">
+          <span class="label">仅简体中文</span>
+          <span class="desc">简体字幕优先</span>
+        </label>
+        <label class="option-card" data-lang="cht">
+          <input type="radio" name="lang" value="cht">
+          <span class="label">仅繁体中文</span>
+          <span class="desc">繁体/港台优先</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Provider Selector -->
+    <div class="section">
+      <div class="section-title">
+        <span>⚡ 数据源选择</span>
+      </div>
+      <div class="options-grid" id="source-options">
+        <label class="option-card active" data-source="all">
+          <input type="radio" name="source" value="all" checked>
+          <span class="label">全部聚合</span>
+          <span class="desc">SubHD + Zimuku</span>
+        </label>
+        <label class="option-card" data-source="subhd">
+          <input type="radio" name="source" value="subhd">
+          <span class="label">仅 SubHD</span>
+          <span class="desc">subhd.tv 镜像源</span>
+        </label>
+        <label class="option-card" data-source="zimuku">
+          <input type="radio" name="source" value="zimuku">
+          <span class="label">仅 Zimuku</span>
+          <span class="desc">srtku / zmk 源</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Max Results -->
+    <div class="section">
+      <div class="section-title">
+        <span>📊 最大字幕数量</span>
+      </div>
+      <div class="options-grid" id="max-options">
+        <label class="option-card" data-max="5">
+          <input type="radio" name="max" value="5">
+          <span class="label">5 条</span>
+          <span class="desc">极简精选</span>
+        </label>
+        <label class="option-card active" data-max="8">
+          <input type="radio" name="max" value="8" checked>
+          <span class="label">8 条</span>
+          <span class="desc">推荐默认</span>
+        </label>
+        <label class="option-card" data-max="12">
+          <input type="radio" name="max" value="12">
+          <span class="label">12 条</span>
+          <span class="desc">更多备选</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="actions">
+      <a id="install-btn" href="#" class="btn btn-primary">
+        <span>🚀 一键安装到 Stremio</span>
+      </a>
+      <button id="copy-btn" class="btn btn-secondary">
+        <span>📋 复制 Addon 链接 (适用于电视版/手机端)</span>
+      </button>
+    </div>
+
+    <!-- Features -->
+    <div class="features-list">
+      <div class="feature-item">
+        <span class="feature-icon">🛡️</span>
+        <div><strong>无感 ASS 净化</strong><br>彻底移除 \pos 屏幕坐标与特效标签，避免 TV 端乱码。</div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">⚡</span>
+        <div><strong>秒级两级缓存</strong><br>SQLite 存储 12h 搜索结果，磁盘缓存清洗后的 SRT。</div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">🎯</span>
+        <div><strong>IMDb 精准定位</strong><br>整剧与单集智能解析，自动化多镜像重试与容灾。</div>
+      </div>
+      <div class="feature-item">
+        <span class="feature-icon">🔒</span>
+        <div><strong>零配置免账号</strong><br>纯净服务端流式解压，即装即用，保护用户隐私。</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">
+    <span>✅ 已复制 Addon 链接到剪贴板！</span>
+  </div>
+
+  <script>
+    const state = {
+      lang: 'bilingual',
+      source: 'all',
+      max_results: 8
+    };
+
+    function setupSelector(containerId, stateKey) {
+      const container = document.getElementById(containerId);
+      const cards = container.querySelectorAll('.option-card');
+      cards.forEach(card => {
+        card.addEventListener('click', () => {
+          cards.forEach(c => c.classList.remove('active'));
+          card.classList.add('active');
+          const radio = card.querySelector('input[type="radio"]');
+          radio.checked = true;
+          state[stateKey] = radio.value;
+          updateLinks();
+        });
+      });
+    }
+
+    setupSelector('lang-options', 'lang');
+    setupSelector('source-options', 'source');
+    setupSelector('max-options', 'max_results');
+
+    function getManifestUrls() {
+      const host = window.location.host;
+      const proto = window.location.protocol;
+      
+      // Check if default config
+      const isDefault = (state.lang === 'bilingual' && state.source === 'all' && Number(state.max_results) === 8);
+      
+      let manifestPath = '/manifest.json';
+      if (!isDefault) {
+        const jsonStr = JSON.stringify(state);
+        // Base64 URL safe
+        const b64 = btoa(unescape(encodeURIComponent(jsonStr)))
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
+        manifestPath = `/${b64}/manifest.json`;
+      }
+
+      const httpsUrl = `${proto}//${host}${manifestPath}`;
+      const stremioUrl = `stremio://${host}${manifestPath}`;
+      return { httpsUrl, stremioUrl };
+    }
+
+    function updateLinks() {
+      const { httpsUrl, stremioUrl } = getManifestUrls();
+      document.getElementById('install-btn').href = stremioUrl;
+    }
+
+    document.getElementById('copy-btn').addEventListener('click', async () => {
+      const { httpsUrl } = getManifestUrls();
+      try {
+        await navigator.clipboard.writeText(httpsUrl);
+        showToast('✅ 已复制 Addon 链接到剪贴板！');
+      } catch (err) {
+        // Fallback prompt
+        window.prompt('请手动复制以下 Addon 链接：', httpsUrl);
+      }
+    });
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.querySelector('span').innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+
+    updateLinks();
+  </script>
+</body>
+</html>
