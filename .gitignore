@@ -23,3 +23,6 @@ ENV/
 # IDE files
 .vscode/
 .idea/
+
+# Harbor source checkout
+harbor/

@@ -20,6 +20,9 @@ class CinemetaClient:
         Query Cinemeta API to resolve IMDb ID to (title, year).
         Returns ("", None) if resolution fails.
         """
+        if not imdb_id or not imdb_id.startswith("tt"):
+            return "", None
+
         clean_type = "series" if media_type == "series" else "movie"
         url = f"{settings.CINEMETA_URL}/meta/{clean_type}/{imdb_id}.json"
 

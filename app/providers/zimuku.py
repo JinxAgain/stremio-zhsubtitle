@@ -101,7 +101,7 @@ class ZimukuProvider(BaseProvider):
         super().__init__(config)
         self.base_url = self.config.get("base_url", settings.ZIMUKU_BASE_URL)
         self.fallback_urls = self.config.get("fallback_urls", settings.ZIMUKU_FALLBACKS)
-        self.timeout = 7
+        self.timeout = 4
 
         if settings.UPSTREAM_PROXY:
             self.session.proxies.update({

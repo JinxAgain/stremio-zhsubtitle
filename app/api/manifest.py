@@ -32,7 +32,6 @@ def build_manifest(config_data: Dict[str, Any] = None) -> Dict[str, Any]:
             {
                 "name": "subtitles",
                 "types": ["movie", "series"],
-                "idPrefixes": ["tt"],
                 "extra": [
                     {"name": "videoHash", "isRequired": False},
                     {"name": "videoSize", "isRequired": False},

@@ -73,8 +73,8 @@ def test_subtitles_invalid_media_type():
 
 
 def test_format_subtitle_filename():
-    """Verify format_subtitle_filename creates informative titles."""
-    from app.api.subtitles import format_subtitle_filename
+    """Verify format_subtitle_filename creates informative titles with release specs."""
+    from app.api.subtitles import format_subtitle_filename, format_subtitle_info
     from app.providers.base import SubtitleCandidate, SubtitleTags, VideoQueryMeta
 
     cand = SubtitleCandidate(
@@ -85,13 +85,22 @@ def test_format_subtitle_filename():
         tags=SubtitleTags(bilingual=True)
     )
     query = VideoQueryMeta(imdb_id="tt1439629", media_type="series", season=1, episode=14, title="Community")
-    fn = format_subtitle_filename(cand, query)
-    assert fn.startswith("[Bilingual.SubHD]")
+    label, fn = format_subtitle_info(cand, query)
+
+    assert "[Bilingual.SubHD]" in fn
     assert fn.endswith(".srt")
-    assert "0.srt" not in fn
     assert "Community.S01E14" in fn
-    # Must be 100% ASCII
+    assert "BluRay" in fn
+    assert "1080p" in fn
+    assert "x264" in fn
     assert all(ord(c) < 128 for c in fn)
+
+    # Label should follow OpenSubtitles v3 format with middle dot
+    assert "Community · S01E14" in label
+    assert "BluRay" in label
+    assert "1080p" in label
+    assert "x264" in label
+    assert "[Bilingual SubHD]" in label
 
     # Test candidate with Chinese title
     cand_cn = SubtitleCandidate(
@@ -102,8 +111,44 @@ def test_format_subtitle_filename():
         tags=SubtitleTags(bilingual=True)
     )
     fn_cn = format_subtitle_filename(cand_cn, query)
-    assert fn_cn.startswith("[Bilingual.Zimuku]")
+    assert "[Bilingual.Zimuku]" in fn_cn
     assert "Community" in fn_cn
+    assert "WEB-DL" in fn_cn
     assert "zip" not in fn_cn
     assert all(ord(c) < 128 for c in fn_cn)
+
+
+def test_parse_media_id_tmdb():
+    from app.api.subtitles import parse_media_id, extract_meta_from_filename
+
+    # Movie with tmdb prefix
+    meta_m = parse_media_id("movie", "tmdb:12345")
+    assert meta_m.imdb_id == "tmdb:12345"
+    assert meta_m.season is None
+    assert meta_m.episode is None
+
+    # Series with tmdb prefix and season/episode
+    meta_s = parse_media_id("series", "tmdb:67890:2:5")
+    assert meta_s.imdb_id == "tmdb:67890"
+    assert meta_s.season == 2
+    assert meta_s.episode == 5
+
+    # Filename extraction fallback
+    title, year, season, ep = extract_meta_from_filename("The.End.of.Oak.Street.2026.2160p.AMZN.WEB-DL.mkv")
+    assert title == "The End of Oak Street"
+    assert year == 2026
+
+    title_tv, _, s_tv, ep_tv = extract_meta_from_filename("Community.S02E06.1080p.mkv")
+    assert title_tv == "Community"
+    assert s_tv == 2
+    assert ep_tv == 6
+
+
+def test_manifest_no_id_prefixes_restriction():
+    response = client.get("/manifest.json")
+    assert response.status_code == 200
+    data = response.json()
+    sub_res = [r for r in data["resources"] if r.get("name") == "subtitles"][0]
+    assert "idPrefixes" not in sub_res
+
 

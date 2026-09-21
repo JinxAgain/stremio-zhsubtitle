@@ -48,7 +48,7 @@
 4. Once the build completes, you will have a free, permanent HTTPS domain:
    `https://<your-username>-<space-name>.hf.space`
 5. Open that URL in your browser and click **[Install to Stremio]** to sync the addon across all devices logged into your Stremio account!
-6. *(Optional)* Set up a free monitor (e.g., [UptimeRobot](https://uptimerobot.com)) to ping `https://<your-username>-<space-name>.hf.space/manifest.json` every 10 minutes to prevent the container from sleeping.
+6. _(Optional)_ Set up a free monitor (e.g., [UptimeRobot](https://uptimerobot.com)) to ping `https://<your-username>-<space-name>.hf.space/manifest.json` every 10 minutes to prevent the container from sleeping.
 
 ---
 
@@ -57,7 +57,7 @@
 Create or use the included `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   stremio-zhsubtitle:
@@ -72,12 +72,13 @@ services:
       - HOST=0.0.0.0
       - CACHE_DIR=/app/data/cache
       - CACHE_TTL_HOURS=12
-      - UPSTREAM_PROXY=""   # Optional HTTP/SOCKS5 proxy if hosted outside Asia
+      - UPSTREAM_PROXY="" # Optional HTTP/SOCKS5 proxy if hosted outside Asia
     volumes:
       - ./data:/app/data
 ```
 
 Start the container:
+
 ```bash
 docker-compose up -d
 ```
@@ -100,33 +101,32 @@ Access the configuration page at `http://<your-server-ip>:7000`.
    ```
 3. Open `http://localhost:7000` in your web browser to configure and install the addon.
 
-> **Note for Windows Users with IDM (Internet Download Manager):**  
-> If you have IDM installed, ensure `127.0.0.1` and `localhost` are added to IDM's exception list (*Options → File Types → "Don't start downloading automatically from the following addresses"*) to prevent IDM from intercepting subtitle streams meant for the Stremio player.
-
 ---
 
 ## ⚙️ Environment Variables
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `PORT` | `7000` (Docker default `7860`) | Server HTTP listening port |
-| `HOST` | `0.0.0.0` | Server listening host address |
-| `CACHE_DIR` | `./data/cache` | Path for SQLite cache and subtitle storage |
-| `CACHE_TTL_HOURS` | `12` | Search results cache expiration in hours |
-| `UPSTREAM_PROXY` | *(empty)* | Optional HTTP or SOCKS5 proxy URL for upstream requests |
-| `SUBHD_BASE_URL` | `https://subhd.tv` | Primary SubHD base URL |
-| `ZIMUKU_BASE_URL` | `https://srtku.com` | Primary Zimuku base URL |
+| Variable          | Default                        | Description                                             |
+| :---------------- | :----------------------------- | :------------------------------------------------------ |
+| `PORT`            | `7000` (Docker default `7860`) | Server HTTP listening port                              |
+| `HOST`            | `0.0.0.0`                      | Server listening host address                           |
+| `CACHE_DIR`       | `./data/cache`                 | Path for SQLite cache and subtitle storage              |
+| `CACHE_TTL_HOURS` | `12`                           | Search results cache expiration in hours                |
+| `UPSTREAM_PROXY`  | _(empty)_                      | Optional HTTP or SOCKS5 proxy URL for upstream requests |
+| `SUBHD_BASE_URL`  | `https://subhd.tv`             | Primary SubHD base URL                                  |
+| `ZIMUKU_BASE_URL` | `https://srtku.com`            | Primary Zimuku base URL                                 |
 
 ---
 
 ## 🧪 Automated Testing
 
 Run the comprehensive unit test suite:
+
 ```bash
 python -m pytest tests -v
 ```
 
 The test suite covers:
+
 - Stremio Manifest and configuration endpoints
 - Subtitle extraction and in-memory archive parsing
 - Multi-charset encoding detection and ASS/VTT to SRT conversion
@@ -138,6 +138,7 @@ The test suite covers:
 ## 🤖 AI Disclosure
 
 This project was designed, developed, and tested with the assistance of Artificial Intelligence:
+
 - **Architecture & Implementation**: Developed in collaboration with Google DeepMind's **Antigravity** agentic AI pair programmer.
 - **Algorithms**: The pure-Python 5-digit BMP CAPTCHA template matching engine, ASS-to-SRT normalization parser, and Stremio v3 protocol integration were synthesized and validated through AI-assisted pair-programming workflows.
 - **Human Oversight**: All design decisions, security validations, and feature specifications were guided, audited, and tested by human maintainers.
