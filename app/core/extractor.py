@@ -124,6 +124,29 @@ class SubtitleExtractor:
                         files_map[base_name] = zf.read(info)
 
                 if not files_map:
+                    # Check for nested archives inside zip (e.g. season pack with per-episode zips)
+                    nested_map: Dict[str, bytes] = {}
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        base_name = os.path.basename(info.filename)
+                        if base_name.lower().endswith(ARCHIVE_EXTENSIONS):
+                            nested_map[base_name] = zf.read(info)
+                    if nested_map:
+                        best_archive = cls.pick_best_file(
+                            list(nested_map.keys()),
+                            episode=episode,
+                            prefer_bilingual=prefer_bilingual,
+                            prefer_traditional=prefer_traditional
+                        )
+                        if best_archive and best_archive in nested_map:
+                            return cls.extract_best_subtitle(
+                                nested_map[best_archive],
+                                best_archive,
+                                episode=episode,
+                                prefer_bilingual=prefer_bilingual,
+                                prefer_traditional=prefer_traditional
+                            )
                     return None, ""
 
                 best_name = cls.pick_best_file(
@@ -138,6 +161,7 @@ class SubtitleExtractor:
             logger.warning(f"ZIP unpack error: {e}")
 
         return None, ""
+
 
     @classmethod
     def _extract_generic_archive(
@@ -243,6 +267,35 @@ class SubtitleExtractor:
                         if f.lower().endswith(SUBTITLE_EXTENSIONS):
                             found_files[f] = os.path.join(root, f)
 
+                if not found_files:
+                    # Check for nested archives inside archive (e.g. RAR containing per-episode ZIPs)
+                    nested_archives: Dict[str, str] = {}
+                    for root, _, files in os.walk(extract_dest):
+                        if "__MACOSX" in root:
+                            continue
+                        for f in files:
+                            if f.startswith("._"):
+                                continue
+                            if f.lower().endswith(ARCHIVE_EXTENSIONS):
+                                nested_archives[f] = os.path.join(root, f)
+                    if nested_archives:
+                        best_archive = cls.pick_best_file(
+                            list(nested_archives.keys()),
+                            episode=episode,
+                            prefer_bilingual=prefer_bilingual,
+                            prefer_traditional=prefer_traditional
+                        )
+                        if best_archive and best_archive in nested_archives:
+                            with open(nested_archives[best_archive], "rb") as nested_f:
+                                nested_bytes = nested_f.read()
+                            return cls.extract_best_subtitle(
+                                nested_bytes,
+                                best_archive,
+                                episode=episode,
+                                prefer_bilingual=prefer_bilingual,
+                                prefer_traditional=prefer_traditional
+                            )
+
                 if found_files:
                     best_name = cls.pick_best_file(
                         list(found_files.keys()),
@@ -253,6 +306,7 @@ class SubtitleExtractor:
                     if best_name and best_name in found_files:
                         with open(found_files[best_name], "rb") as sub_f:
                             return sub_f.read(), best_name
+
 
         except Exception as e:
             logger.error(f"Generic archive extraction failed: {e}")

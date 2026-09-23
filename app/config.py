@@ -41,7 +41,7 @@ class Settings:
     # Addon identification
     ADDON_ID: str = "org.stremio.zhsubtitle"
     ADDON_NAME: str = "Chinese Subtitles (Zimuku & SubHD)"
-    ADDON_VERSION: str = "1.0.0"
+    ADDON_VERSION: str = "1.1.0"
     ADDON_DESCRIPTION: str = (
         "High-quality Chinese subtitles aggregated from Zimuku & SubHD with zero-garble UTF-8 output."
     )

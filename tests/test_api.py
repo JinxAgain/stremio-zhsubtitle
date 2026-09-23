@@ -21,7 +21,9 @@ def test_manifest_configured():
     response = client.get("/eyJsYW5nIjoiY2hzIiwic291cmNlIjoiYWxsIn0/manifest.json")
     assert response.status_code == 200
     data = response.json()
-    assert "[简]" in data["name"]
+    assert data["name"] == "Chinese Subtitles (Zimuku & SubHD)"
+    assert data["version"] == "1.1.0"
+
 
 
 def test_configure_page():

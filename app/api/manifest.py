@@ -12,22 +12,13 @@ router = APIRouter()
 
 
 def build_manifest(config_data: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Generate Stremio Addon manifest with optional user configuration indicators."""
-    addon_name = settings.ADDON_NAME
-    if config_data:
-        lang = config_data.get("lang", "")
-        if lang == "chs":
-            addon_name += " [简]"
-        elif lang == "cht":
-            addon_name += " [繁]"
-        elif lang == "bilingual":
-            addon_name += " [双语]"
-
+    """Generate Stremio Addon manifest."""
     return {
         "id": settings.ADDON_ID,
         "version": settings.ADDON_VERSION,
-        "name": addon_name,
+        "name": settings.ADDON_NAME,
         "description": settings.ADDON_DESCRIPTION,
+
         "resources": [
             {
                 "name": "subtitles",
