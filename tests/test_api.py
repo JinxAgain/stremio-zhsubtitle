@@ -152,3 +152,72 @@ def test_manifest_no_id_prefixes_restriction():
     assert "idPrefixes" not in sub_res
 
 
+def test_manifest_head_method():
+    """Verify HEAD /manifest.json returns 200 OK for UptimeRobot monitoring."""
+    resp = client.head("/manifest.json")
+    assert resp.status_code == 200
+
+
+def test_subtitles_url_with_newline():
+    """Verify multiline stream filename containing %0A does not 404 in Starlette routing."""
+    url = (
+        "/subtitles/series/tt4337894:1:4/filename=%F0%9F%93%81%C2%A0You%2C%20Me%20and%20the%20Apocalypse"
+        "%20S01E04%201080p%20WEB-DL%20DD%2B%205.1%20x264-TrollHD.mkv%0A%E2%9A%99%EF%B8%8F%201080P"
+        "%20%E2%80%A2%20%F0%9F%92%BE%202.9%20GB%20%F0%9F%93%81%C2%A0You%2C%20Me%20and%20the%20Apocalypse"
+        "%20WEB-DL%201080p%20TROLLHD.json"
+    )
+    resp = client.get(url)
+    assert resp.status_code == 200
+    assert "subtitles" in resp.json()
+
+
+def test_season_pack_scoring_priority():
+    """Verify full season packs receive top priority and are not penalized."""
+    from app.core.scorer import SubtitleScorer
+    from app.providers.base import SubtitleCandidate, SubtitleTags, VideoQueryMeta
+
+    query = VideoQueryMeta(imdb_id="tt4337894", media_type="series", season=1, episode=4, title="You, Me and the Apocalypse")
+
+    c_pack = SubtitleCandidate(
+        id="pack",
+        provider="subhd",
+        title="You.Me.and.the.Apocalypse.S01.1080p.WEBRip.DD5.1.x264-TrollHD",
+        page_url="https://subhd.tv/a/pack",
+        tags=SubtitleTags(bilingual=True)
+    )
+    c_single = SubtitleCandidate(
+        id="single",
+        provider="subhd",
+        title="You.Me.and.the.Apocalypse.S01E04.720p.HDTV.x264",
+        page_url="https://subhd.tv/a/single",
+        tags=SubtitleTags(bilingual=True)
+    )
+
+    ranked = SubtitleScorer.rank_candidates([c_single, c_pack], query)
+    assert ranked[0].id == "pack"
+
+
+def test_pick_best_file_season_pack_and_variants():
+    """Verify picking target episode from season pack and bilingual SRT over english-only."""
+    from app.core.extractor import SubtitleExtractor
+
+    # 1. Season pack
+    files = [
+        "You, Me and the Apocalypse S01E01.zh-en.srt",
+        "You, Me and the Apocalypse S01E04.zh-en.srt",
+        "You, Me and the Apocalypse S01E10.zh-en.srt"
+    ]
+    assert SubtitleExtractor.pick_best_file(files, episode=4) == "You, Me and the Apocalypse S01E04.zh-en.srt"
+
+    # 2. Multi-variant archive: avoid english-only and prefer bilingual SRT
+    variants = [
+        "Walking.Dead.S09E09.1080p.chs.eng.英文.srt",
+        "Walking.Dead.S09E09.1080p.chs.eng.繁体.ass",
+        "Walking.Dead.S09E09.1080p.chs.eng.简体&英文.srt",
+        "Walking.Dead.S09E09.1080p.chs.eng.繁体&英文.ass"
+    ]
+    best = SubtitleExtractor.pick_best_file(variants, episode=9, prefer_bilingual=True)
+    assert best == "Walking.Dead.S09E09.1080p.chs.eng.简体&英文.srt"
+
+
+

@@ -64,14 +64,15 @@ def parse_config(config_str: str) -> Dict[str, Any]:
             return {}
 
 
-@router.get("/manifest.json")
+@router.api_route("/manifest.json", methods=["GET", "HEAD"])
 async def get_default_manifest(request: Request):
     """Serve default Addon Manifest."""
     return build_manifest()
 
 
-@router.get("/{config}/manifest.json")
+@router.api_route("/{config}/manifest.json", methods=["GET", "HEAD"])
 async def get_configured_manifest(config: str, request: Request):
     """Serve customized Addon Manifest for configured installations."""
     config_data = parse_config(config)
     return build_manifest(config_data)
+

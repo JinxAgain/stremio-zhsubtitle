@@ -110,9 +110,19 @@ class CacheManager:
         return self.subtitles_dir / filename
 
     def has_subtitle(self, filename: str) -> bool:
-        """Check if cleaned subtitle exists on disk."""
+        """Check if cleaned subtitle exists on disk and contains valid SRT data."""
         path = self.get_subtitle_path(filename)
-        return path.is_file() and path.stat().st_size > 0
+        if not path.is_file() or path.stat().st_size < 20:
+            return False
+        try:
+            # Self-heal check: ensure file actually has SRT timestamps
+            sample = path.read_bytes()[:500]
+            if b"-->" not in sample:
+                path.unlink(missing_ok=True)
+                return False
+        except Exception:
+            return False
+        return True
 
     def get_subtitle(self, filename: str) -> Optional[bytes]:
         """Read subtitle content from disk."""

@@ -96,17 +96,31 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
     )
 
     if not sub_bytes:
-        # Fallback to raw bytes if direct text
+        # Check if the content is binary archive rather than direct subtitle file
+        lower_name = raw_filename.lower()
+        is_archive = (
+            lower_name.endswith((".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz"))
+            or archive_bytes[:4] in (b"Rar!", b"PK\x03\x04", b"7z\xbc\xaf")
+        )
+        if is_archive:
+            logger.error(f"[Download] Failed to unpack archive {raw_filename} ({provider}:{sub_id})")
+            raise HTTPException(status_code=502, detail="Failed to extract subtitle from archive")
         sub_bytes, sub_name = archive_bytes, raw_filename
 
     # 4. Clean tags, remove ASS drawing/positioning codes, and normalize to UTF-8 SRT
     cleaned_srt = SubtitleCleaner.normalize_to_utf8_srt(sub_bytes, sub_name)
+
+    # Validate that we actually produced valid SRT subtitle content
+    if len(cleaned_srt.strip()) < 20 or b"-->" not in cleaned_srt:
+        logger.error(f"[Download] Normalization yielded invalid SRT for {provider}:{sub_id}")
+        raise HTTPException(status_code=502, detail="Subtitle extraction resulted in invalid SRT format")
 
     # 5. Save to disk cache for subsequent requests
     try:
         cache_manager.save_subtitle(cache_filename, cleaned_srt)
     except Exception as e:
         logger.error(f"[Download] Error caching {cache_filename}: {e}")
+
 
     # 6. Stream directly to Stremio player
     return Response(

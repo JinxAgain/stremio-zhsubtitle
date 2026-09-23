@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -50,6 +50,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def sanitize_request_path_newlines(request: Request, call_next):
+    """
+    Sanitize newlines (%0A, \\r, \\n) in the request path.
+    Some clients (e.g. Harbor) forward multi-line torrent/stream filenames in the URL path,
+    which otherwise breaks Starlette's non-DOTALL path routing regex and causes 404s.
+    """
+    path = request.scope.get("path", "")
+    if "\n" in path or "\r" in path:
+        request.scope["path"] = path.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return await call_next(request)
+
 
 # Static assets
 static_dir = Path(__file__).resolve().parent.parent / "static"

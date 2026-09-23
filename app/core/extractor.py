@@ -17,11 +17,11 @@ SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".vtt")
 ARCHIVE_EXTENSIONS = (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz")
 
 BILINGUAL_REGEX = re.compile(
-    r'(?:双语|中英|简英|繁英|英简|英繁|'
-    r'(?:chs|cht|zh|chi|zho)[&+._ /-]*(?:eng?|english)|'
-    r'(?:eng?|english)[&+._ /-]*(?:chs|cht|zh|chi|zho)|'
-    r'\[(?:chs|cht|zh)[^\]]*\].*?\[(?:eng?|english)[^\]]*\]|'
-    r'\[(?:eng?|english)[^\]]*\].*?\[(?:chs|cht|zh)[^\]]*\])',
+    r'(?:双语|中英|简英|繁英|英简|英繁|zh[-_]en|'
+    r'(?:chs|cht|zh|chi|zho|简|繁|简体|繁体)[&+._ /-]*(?:eng?|english|英文|英语)|'
+    r'(?:eng?|english|英文|英语)[&+._ /-]*(?:chs|cht|zh|chi|zho|简|繁|简体|繁体)|'
+    r'\[(?:chs|cht|zh|简|繁|简体|繁体)[^\]]*\].*?\[(?:eng?|english|英文|英语)[^\]]*\]|'
+    r'\[(?:eng?|english|英文|英语)[^\]]*\].*?\[(?:chs|cht|zh|简|繁|简体|繁体)[^\]]*\])',
     re.IGNORECASE
 )
 
@@ -161,23 +161,38 @@ class SubtitleExtractor:
 
             unpacked = False
 
-            # 1. Try 7-Zip CLI if present
-            exe_7z = shutil.which("7z") or shutil.which("7za")
-            if not exe_7z:
-                for candidate in (r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"):
-                    if os.path.isfile(candidate):
-                        exe_7z = candidate
-                        break
-            if exe_7z:
+            # 1. Try unar CLI (supports all RAR / RAR5 / 7Z / ZIP formats on Linux without non-free dependencies)
+            exe_unar = shutil.which("unar")
+            if exe_unar:
                 try:
-                    res = subprocess.run([exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
-                                         capture_output=True, timeout=30)
+                    res = subprocess.run(
+                        [exe_unar, "-o", extract_dest, "-D", "-f", archive_path],
+                        capture_output=True,
+                        timeout=30
+                    )
                     if res.returncode == 0:
                         unpacked = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"unar extraction failed: {e}")
 
-            # 2. Try py7zr
+            # 2. Try 7-Zip CLI if present
+            if not unpacked:
+                exe_7z = shutil.which("7z") or shutil.which("7za")
+                if not exe_7z:
+                    for candidate in (r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"):
+                        if os.path.isfile(candidate):
+                            exe_7z = candidate
+                            break
+                if exe_7z:
+                    try:
+                        res = subprocess.run([exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
+                                             capture_output=True, timeout=30)
+                        if res.returncode == 0:
+                            unpacked = True
+                    except Exception:
+                        pass
+
+            # 3. Try py7zr
             if not unpacked and original_filename.lower().endswith(".7z"):
                 try:
                     import py7zr
@@ -187,17 +202,19 @@ class SubtitleExtractor:
                 except Exception:
                     pass
 
-            # 3. Try rarfile
+            # 4. Try rarfile
             if not unpacked and original_filename.lower().endswith(".rar"):
                 try:
                     import rarfile
+                    if exe_unar:
+                        rarfile.UNRAR_TOOL = exe_unar
                     with rarfile.RarFile(archive_path) as rf:
                         rf.extractall(extract_dest)
                     unpacked = True
                 except Exception:
                     pass
 
-            # 4. Try tarfile
+            # 5. Try tarfile
             if not unpacked:
                 try:
                     import tarfile
@@ -207,7 +224,7 @@ class SubtitleExtractor:
                 except Exception:
                     pass
 
-            # 5. Fallback to shutil.unpack_archive
+            # 6. Fallback to shutil.unpack_archive
             if not unpacked:
                 try:
                     shutil.unpack_archive(archive_path, extract_dest)
@@ -218,7 +235,11 @@ class SubtitleExtractor:
             if unpacked:
                 found_files: Dict[str, str] = {}
                 for root, _, files in os.walk(extract_dest):
+                    if "__MACOSX" in root:
+                        continue
                     for f in files:
+                        if f.startswith("._"):
+                            continue
                         if f.lower().endswith(SUBTITLE_EXTENSIONS):
                             found_files[f] = os.path.join(root, f)
 
@@ -250,12 +271,14 @@ class SubtitleExtractor:
     ) -> Optional[str]:
         """
         Rank subtitle files based on episode number, language preference, and format.
+        Handles full season packs and multi-variant single-episode archives.
         """
         if not filenames:
             return None
 
         chs_pat = re.compile(r"chs|gb|sc|简|简体|简中|zh-cn|zh-hans|chi|zho", re.IGNORECASE)
         cht_pat = re.compile(r"cht|tc|big5|繁|繁体|繁體|繁中|zh-tw|zh-hk|zh-hant", re.IGNORECASE)
+        eng_only_pat = re.compile(r"(?:^|[._ -])(?:eng?|english|英文)[._ -]*(?:srt|ass|ssa|vtt)$", re.IGNORECASE)
 
         def score_file(filename: str) -> Tuple[int, int, int]:
             lower = filename.lower()
@@ -268,40 +291,74 @@ class SubtitleExtractor:
                     rf"s\d{{1,2}}e0*{episode}\b",
                     rf"第\s*0*{episode}\s*[集话話]",
                     rf"\[0*{episode}\]",
-                    rf"\b0*{episode}\b"
+                    rf"(?:^|[._ -])0*{episode}(?:[._ -]|\.srt|\.ass|\.ssa|\.vtt)"
                 ]
-                for pat in ep_patterns:
-                    if re.search(pat, lower):
-                        ep_score = 1000
-                        break
+                matched_target_ep = any(re.search(pat, lower) for pat in ep_patterns)
+
+                # Check if matches a different episode (e.g. S01E01 when looking for S01E04)
+                all_eps = [
+                    int(num) for num in re.findall(r"\b[eE][pP]?(\d{1,3})\b", lower)
+                ]
+                has_different_ep = False
+                if all_eps:
+                    if episode not in all_eps:
+                        has_different_ep = True
+                else:
+                    cn_eps = [
+                        int(num) for num in re.findall(r"第\s*(\d{1,3})\s*[集话話]", lower)
+                    ]
+                    if cn_eps and episode not in cn_eps:
+                        has_different_ep = True
+
+                if matched_target_ep:
+                    ep_score = 2000
+                elif has_different_ep:
+                    ep_score = -5000  # Disqualify wrong episode in season pack
+                else:
+                    ep_score = 500
 
             # 2. Language match score
-            lang_score = 0
-            is_bilingual = bool(BILINGUAL_REGEX.search(lower))
-            is_cht = bool(cht_pat.search(lower))
-            is_chs = bool(chs_pat.search(lower))
+            stem, _ = os.path.splitext(filename)
+            parts = re.split(r"[._ -]+", stem)
+            last_tag = parts[-1].strip().lower() if parts else ""
 
-            if prefer_bilingual and is_bilingual:
-                lang_score = 500
+            # Check if filename ends with English-only indicator (e.g. .英文.srt, .eng.srt)
+            is_eng_only_tag = bool(eng_only_pat.match(last_tag))
+
+            is_bilingual = bool(BILINGUAL_REGEX.search(last_tag)) or bool(BILINGUAL_REGEX.search(lower))
+            is_cht = bool(cht_pat.search(last_tag)) or bool(cht_pat.search(lower))
+            is_chs = bool(chs_pat.search(last_tag)) or bool(chs_pat.search(lower))
+
+            if is_eng_only_tag:
+                lang_score = -2000  # Never choose pure English file when Chinese is requested
+            elif prefer_bilingual and is_bilingual:
+                # Prefer files that explicitly specify bilingual in their specific variant tag
+                lang_score = 1100 if BILINGUAL_REGEX.search(last_tag) else 1000
             elif prefer_traditional and is_cht:
-                lang_score = 450
+                lang_score = 900
             elif not prefer_traditional and is_chs:
-                lang_score = 400
+                lang_score = 800
             elif is_bilingual:
-                lang_score = 350
-            elif is_chs or is_cht:
-                lang_score = 300
+                lang_score = 700
+            elif is_chs:
+                lang_score = 600
+            elif is_cht:
+                lang_score = 500
+            else:
+                lang_score = 400
 
-            # 3. Format preference score (.ass/.ssa > .srt > .vtt)
+
+            # 3. Format preference score: .srt > .ass > .ssa > .vtt
             fmt_score = 0
-            if lower.endswith((".ass", ".ssa")):
-                fmt_score = 30
-            elif lower.endswith(".srt"):
-                fmt_score = 20
+            if lower.endswith(".srt"):
+                fmt_score = 50
+            elif lower.endswith((".ass", ".ssa")):
+                fmt_score = 40
             elif lower.endswith(".vtt"):
-                fmt_score = 10
+                fmt_score = 20
 
             return (ep_score, lang_score, fmt_score)
 
         sorted_files = sorted(filenames, key=score_file, reverse=True)
         return sorted_files[0]
+

@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Install system utilities (p7zip for archive extraction)
+# Install system utilities (p7zip and unar for full RAR/7z/ZIP archive extraction)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends p7zip-full && \
+    apt-get install -y --no-install-recommends p7zip-full unar && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
