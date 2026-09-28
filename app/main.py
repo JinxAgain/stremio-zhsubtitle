@@ -77,6 +77,13 @@ app.include_router(download_router)
 app.include_router(subtitles_router)
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Silence browser favicon requests."""
+    from fastapi import Response
+    return Response(status_code=204)
+
+
 def run():
     """Run server via uvicorn programmatically."""
     uvicorn.run(

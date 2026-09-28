@@ -397,6 +397,12 @@ async def handle_subtitles_request(
             elif isinstance(r, Exception):
                 logger.warning(f"Provider search failed with exception: {r}")
 
+        subhd_count = sum(1 for c in candidates if c.provider == "subhd")
+        zimuku_count = sum(1 for c in candidates if c.provider == "zimuku")
+        logger.info(
+            f"[Subtitles] Aggregated {len(candidates)} candidates ({subhd_count} SubHD, {zimuku_count} Zimuku)"
+        )
+
         # Rank and filter candidates
         ranked = SubtitleScorer.rank_candidates(
             candidates=candidates,
@@ -404,6 +410,7 @@ async def handle_subtitles_request(
             lang_preference=lang_pref,
             max_results=max_results
         )
+        logger.info(f"[Subtitles] Returning top {len(ranked)} subtitles for {query_meta.imdb_id}")
 
         # Format Stremio subtitle payload with informative variant filenames and labels
         subtitles = []

@@ -65,7 +65,7 @@ class CinemetaClient:
                 f"https://94c8cb9f702d-tmdb-addon.baby-beamup.club/meta/{clean_type}/tmdb:{tmdb_id_part}.json"
             )
             try:
-                async with httpx.AsyncClient(timeout=2.5) as client:
+                async with httpx.AsyncClient(timeout=4.0) as client:
                     resp = await client.get(tmdb_addon_url)
                     if resp.status_code == 200:
                         meta = resp.json().get("meta", {})

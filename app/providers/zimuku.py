@@ -173,6 +173,17 @@ class ZimukuProvider(BaseProvider):
             logger.error(f"[Zimuku] Captcha bypass error: {e}")
             return False
 
+    @staticmethod
+    def _normalize_url(domain: str, href: str) -> str:
+        """Force any relative or protocol-relative Zimuku URL to stay on the active mirror domain."""
+        parsed = urllib.parse.urlparse(href)
+        path = parsed.path
+        if parsed.query:
+            path += f"?{parsed.query}"
+        if not path.startswith("/"):
+            path = "/" + path
+        return f"{domain}{path}"
+
     def search(self, meta: VideoQueryMeta) -> List[SubtitleCandidate]:
         """Search Zimuku for matching subtitles using tailored queries."""
         search_queries = self._build_queries(meta)
@@ -185,11 +196,16 @@ class ZimukuProvider(BaseProvider):
 
         for domain in all_endpoints:
             found_any = False
+            domain_dead = False
             for query_str in search_queries:
                 search_url = f"{domain}/search?q={urllib.parse.quote(query_str)}"
                 logger.info(f"[Zimuku] Searching {search_url}...")
                 resp = self._fetch_page(search_url)
-                if not resp or resp.status_code != 200:
+                if not resp:
+                    # If this mirror timed out or cannot connect at all, fail fast to the next mirror
+                    domain_dead = True
+                    break
+                if resp.status_code != 200:
                     continue
 
                 # 1. Parse direct subtitles table from search page
@@ -216,6 +232,8 @@ class ZimukuProvider(BaseProvider):
 
             if candidates:
                 break
+            if domain_dead:
+                continue
 
         return candidates
 
@@ -381,7 +399,7 @@ class ZimukuProvider(BaseProvider):
                 if not any(token.lower() in work_title.lower() for token in s_tokens) and len(work_divs) > 1:
                     continue
 
-            work_url = urllib.parse.urljoin(domain, work_href)
+            work_url = self._normalize_url(domain, work_href)
             work_resp = self._fetch_page(work_url)
             if not work_resp or work_resp.status_code != 200:
                 continue
@@ -415,7 +433,7 @@ class ZimukuProvider(BaseProvider):
             href = sub_a["href"]
             m_id = re.search(r"/detail/(\d+)\.html", href)
             sub_id = m_id.group(1) if m_id else href.split("/")[-1].replace(".html", "")
-            detail_url = f"{domain}/detail/{sub_id}.html"
+            detail_url = self._normalize_url(domain, href)
 
             # Episode filtering for TV series
             if meta.is_tv and meta.episode is not None:
@@ -498,7 +516,7 @@ class ZimukuProvider(BaseProvider):
         if not dl_sub or not dl_sub.a:
             return None, ""
 
-        dl_url = urllib.parse.urljoin(parsed_domain, dl_sub.a["href"])
+        dl_url = self._normalize_url(parsed_domain, dl_sub.a["href"])
         dl_page_resp = self._fetch_page(dl_url, referer=candidate.page_url)
         if not dl_page_resp or dl_page_resp.status_code != 200:
             return None, ""
@@ -510,7 +528,7 @@ class ZimukuProvider(BaseProvider):
 
         links = links_box.find_all("a", href=True)
         for a in links:
-            file_url = urllib.parse.urljoin(parsed_domain, a["href"])
+            file_url = self._normalize_url(parsed_domain, a["href"])
             try:
                 file_resp = self.session.get(file_url, headers={"Referer": dl_url}, timeout=25)
                 if file_resp.status_code == 200 and len(file_resp.content) >= FILE_MIN_SIZE:

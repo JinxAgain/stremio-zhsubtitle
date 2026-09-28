@@ -28,10 +28,10 @@ class Settings:
         if url.strip()
     ]
 
-    ZIMUKU_BASE_URL: str = os.getenv("ZIMUKU_BASE_URL", "https://srtku.com").rstrip("/")
+    ZIMUKU_BASE_URL: str = os.getenv("ZIMUKU_BASE_URL", "https://zmk.pw").rstrip("/")
     ZIMUKU_FALLBACKS: List[str] = [
         url.strip().rstrip("/")
-        for url in os.getenv("ZIMUKU_FALLBACKS", "https://zmk.pw,https://zimuku.org").split(",")
+        for url in os.getenv("ZIMUKU_FALLBACKS", "https://srtku.com,https://zimuku.org").split(",")
         if url.strip()
     ]
 

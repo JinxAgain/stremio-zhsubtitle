@@ -75,13 +75,18 @@ class SubhdProvider(BaseProvider):
                     if resp.status_code == 200:
                         items = self._parse_search_results(resp.content, domain, meta)
                         if items:
+                            logger.info(f"[SubHD] Found {len(items)} subtitles for '{query_str}'")
                             for item in items:
                                 if item.id not in seen_sids:
                                     seen_sids.add(item.id)
                                     candidates.append(item)
                             found_any = True
+                        else:
+                            logger.info(f"[SubHD] No matching subtitles for '{query_str}'")
+                    else:
+                        logger.warning(f"[SubHD] GET {search_url} returned status {resp.status_code}")
                 except Exception as e:
-                    logger.debug(f"[SubHD] Request failed for {search_url}: {e}")
+                    logger.warning(f"[SubHD] Request failed for {search_url}: {e}")
                     continue
 
                 # If specific query returned good matches, don't flood upstream
