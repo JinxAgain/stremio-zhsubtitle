@@ -275,14 +275,25 @@ class SubhdProvider(BaseProvider):
             logger.info(f"[SubHD] Preparing download for sid '{sid}' from {page_url}")
 
             try:
+                # Common headers for browser simulation
+                ajax_headers = {
+                    "Origin": domain,
+                    "Referer": page_url,
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"',
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                }
+
                 # Step 1: POST prepare-download
                 prep_resp = self.session.post(
                     f"{domain}/api/sub/prepare-download",
                     json={"sid": sid},
-                    headers={
-                        "Referer": page_url,
-                        "X-Requested-With": "XMLHttpRequest"
-                    },
+                    headers=ajax_headers,
                     timeout=self.timeout
                 )
                 if prep_resp.status_code != 200:
@@ -304,17 +315,19 @@ class SubhdProvider(BaseProvider):
                     continue
 
                 # Step 3: POST /api/sub/down
+                down_headers = dict(ajax_headers)
+                down_headers["Referer"] = down_url
+
                 api_resp = self.session.post(
                     f"{domain}/api/sub/down",
                     json={"sid": sid, "cap": ""},
-                    headers={
-                        "Referer": down_url,
-                        "X-Requested-With": "XMLHttpRequest"
-                    },
+                    headers=down_headers,
                     timeout=self.timeout
                 )
                 if api_resp.status_code != 200:
-                    logger.warning(f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}")
+                    logger.warning(
+                        f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}: {api_resp.text[:150]}"
+                    )
                     continue
 
                 api_data = api_resp.json()
