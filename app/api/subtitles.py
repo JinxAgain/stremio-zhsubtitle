@@ -286,6 +286,9 @@ def format_subtitle_filename(cand: SubtitleCandidate, query: VideoQueryMeta) -> 
 def _is_cache_valid(items: Optional[List[Dict[str, Any]]], query_meta: VideoQueryMeta) -> bool:
     """Check if cached subtitle items have the new clean ASCII filename and label structure."""
     if not items:
+        # If cache is empty, do not treat as valid if filename or title is present
+        if query_meta.filename or query_meta.title:
+            return False
         return True
     for it in items:
         # Require rich label
@@ -354,8 +357,12 @@ async def handle_subtitles_request(
                 mapped_subtitles.append(item_copy)
             return {"subtitles": mapped_subtitles}
 
-        # Resolve media metadata (title, year) via Cinemeta
-        title, year = await CinemetaClient.resolve_metadata(query_meta.media_type, query_meta.imdb_id)
+        # Resolve media metadata (title, year, and resolved IMDb ID) via Cinemeta or TMDB
+        title, year, resolved_imdb = await CinemetaClient.resolve_media_info(query_meta.media_type, query_meta.imdb_id)
+        if resolved_imdb and resolved_imdb.startswith("tt") and not query_meta.imdb_id.startswith("tt"):
+            logger.info(f"[Subtitles] Resolved {query_meta.imdb_id} -> {resolved_imdb}")
+            query_meta.imdb_id = resolved_imdb
+
         if not title and query_meta.filename:
             fn_title, fn_year, fn_s, fn_ep = extract_meta_from_filename(query_meta.filename)
             if fn_title:
@@ -418,8 +425,9 @@ async def handle_subtitles_request(
             }
             subtitles.append(sub_item)
 
-        # Persist to search cache
-        cache_manager.set_search_results(cache_key, subtitles)
+        # Persist to search cache only when candidates are found
+        if subtitles:
+            cache_manager.set_search_results(cache_key, subtitles)
 
         # Return response
         return {"subtitles": subtitles}

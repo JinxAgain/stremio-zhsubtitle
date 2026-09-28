@@ -74,6 +74,41 @@ def is_episode_match(title: str, season: Optional[int], episode: Optional[int]) 
     return False, False
 
 
+def extract_meta_from_filename(filename: str) -> Tuple[str, Optional[int], Optional[int], Optional[int]]:
+    """Extract (title, year, season, episode) from release filename."""
+    if not filename:
+        return "", None, None, None
+
+    clean = urllib.parse.unquote(filename)
+    clean = re.sub(r"\.(mkv|mp4|avi|ts|mov|m4v|iso|wmv|flv)$", "", clean, flags=re.IGNORECASE)
+
+    # Season and Episode (e.g. S01E14)
+    s_match = re.search(r"[Ss](\d{1,2})[Ee](\d{1,2})", clean)
+    season = int(s_match.group(1)) if s_match else None
+    episode = int(s_match.group(2)) if s_match else None
+
+    # Year (19xx or 20xx)
+    y_match = re.search(r"\b(19\d\d|20\d\d)\b", clean)
+    year = int(y_match.group(1)) if y_match else None
+
+    # Cut off title before season, year, or resolution markers
+    cutoff_patterns = [
+        r"[Ss]\d{1,2}[Ee]\d{1,2}",
+        r"\b(19\d\d|20\d\d)\b",
+        r"\b(1080p|720p|2160p|4k|bluray|web-dl|webrip|hdtv|remux)\b",
+    ]
+    min_idx = len(clean)
+    for pat in cutoff_patterns:
+        m = re.search(pat, clean, flags=re.IGNORECASE)
+        if m and m.start() < min_idx and m.start() > 0:
+            min_idx = m.start()
+
+    title_part = clean[:min_idx].strip(" .-_")
+    title = re.sub(r"[._]", " ", title_part).strip()
+
+    return title, year, season, episode
+
+
 @dataclass
 class VideoQueryMeta:
     """Metadata describing the target movie or series episode."""

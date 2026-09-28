@@ -14,6 +14,7 @@ from .base import (
     SubtitleTags,
     VideoQueryMeta,
     is_episode_match,
+    extract_meta_from_filename,
 )
 from ..config import settings
 
@@ -95,28 +96,38 @@ class SubhdProvider(BaseProvider):
     def _build_queries(self, meta: VideoQueryMeta) -> List[str]:
         """Build prioritized search queries for SubHD."""
         queries = []
+        clean_title = meta.title.strip() if meta.title else ""
+        if not clean_title and meta.filename:
+            fn_title, fn_year, fn_s, fn_ep = extract_meta_from_filename(meta.filename)
+            if fn_title:
+                clean_title = fn_title
+                if not meta.year and fn_year:
+                    meta.year = fn_year
+
+        is_tt_imdb = bool(meta.imdb_id and meta.imdb_id.startswith("tt"))
+
         if meta.is_tv and meta.season is not None:
             # 1. Exact episode with IMDb ID
-            if meta.imdb_id and meta.episode is not None:
+            if is_tt_imdb and meta.episode is not None:
                 queries.append(f"{meta.imdb_id} S{meta.season:02d}E{meta.episode:02d}")
             # 2. Season with IMDb ID
-            if meta.imdb_id:
+            if is_tt_imdb:
                 queries.append(f"{meta.imdb_id} S{meta.season:02d}")
                 queries.append(meta.imdb_id)
             # 3. Fallbacks with Title
-            if meta.title:
+            if clean_title:
                 if meta.episode is not None:
-                    queries.append(f"{meta.title} S{meta.season:02d}E{meta.episode:02d}")
-                queries.append(f"{meta.title} S{meta.season:02d}")
-                queries.append(meta.title)
+                    queries.append(f"{clean_title} S{meta.season:02d}E{meta.episode:02d}")
+                queries.append(f"{clean_title} S{meta.season:02d}")
+                queries.append(clean_title)
         else:
             # Movie search
-            if meta.imdb_id:
+            if is_tt_imdb:
                 queries.append(meta.imdb_id)
-            if meta.title:
+            if clean_title:
                 if meta.year:
-                    queries.append(f"{meta.title} {meta.year}")
-                queries.append(meta.title)
+                    queries.append(f"{clean_title} {meta.year}")
+                queries.append(clean_title)
 
         # Deduplicate
         seen = set()

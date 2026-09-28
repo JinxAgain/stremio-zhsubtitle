@@ -17,6 +17,7 @@ from .base import (
     VideoQueryMeta,
     to_cn_season,
     is_episode_match,
+    extract_meta_from_filename,
 )
 from ..config import settings
 
@@ -101,7 +102,7 @@ class ZimukuProvider(BaseProvider):
         super().__init__(config)
         self.base_url = self.config.get("base_url", settings.ZIMUKU_BASE_URL)
         self.fallback_urls = self.config.get("fallback_urls", settings.ZIMUKU_FALLBACKS)
-        self.timeout = 4
+        self.timeout = 6
 
         if settings.UPSTREAM_PROXY:
             self.session.proxies.update({
@@ -116,7 +117,7 @@ class ZimukuProvider(BaseProvider):
             try:
                 resp = self.session.get(url, headers=headers, timeout=self.timeout)
             except Exception as e:
-                logger.debug(f"[Zimuku] GET {url} failed: {e}")
+                logger.warning(f"[Zimuku] GET {url} failed: {e}")
                 return None
 
             # Detect Yunsuo WAF challenge page
@@ -191,9 +192,19 @@ class ZimukuProvider(BaseProvider):
                 if not resp or resp.status_code != 200:
                     continue
 
-                items = self._parse_works_from_search(resp.content, domain, meta)
-                if items:
-                    for sub in items:
+                # 1. Parse direct subtitles table from search page
+                table_items = self._parse_subtitles_from_search_table(resp.content, domain, meta)
+                if table_items:
+                    for sub in table_items:
+                        if sub.id not in seen_ids:
+                            seen_ids.add(sub.id)
+                            candidates.append(sub)
+                    found_any = True
+
+                # 2. Check work items (top series or film cards)
+                work_items = self._parse_works_from_search(resp.content, domain, meta)
+                if work_items:
+                    for sub in work_items:
                         if sub.id not in seen_ids:
                             seen_ids.add(sub.id)
                             candidates.append(sub)
@@ -212,6 +223,12 @@ class ZimukuProvider(BaseProvider):
         """Build prioritized search queries for Zimuku."""
         queries = []
         clean_title = meta.title.strip() if meta.title else ""
+        if not clean_title and meta.filename:
+            fn_title, fn_year, fn_s, fn_ep = extract_meta_from_filename(meta.filename)
+            if fn_title:
+                clean_title = fn_title
+                if not meta.year and fn_year:
+                    meta.year = fn_year
 
         if meta.is_tv and meta.season:
             cn_s = to_cn_season(meta.season)
@@ -219,14 +236,14 @@ class ZimukuProvider(BaseProvider):
                 queries.append(f"{clean_title} {cn_s}")
                 queries.append(f"{clean_title} Season {meta.season}")
                 queries.append(clean_title)
-            if meta.season == 1 and meta.imdb_id:
+            if meta.season == 1 and meta.imdb_id and meta.imdb_id.startswith("tt"):
                 queries.append(meta.imdb_id)
         else:
             if clean_title:
                 if meta.year:
                     queries.append(f"{clean_title} {meta.year}")
                 queries.append(clean_title)
-            if meta.imdb_id:
+            if meta.imdb_id and meta.imdb_id.startswith("tt"):
                 queries.append(meta.imdb_id)
 
         # Deduplicate
@@ -237,6 +254,103 @@ class ZimukuProvider(BaseProvider):
                 seen.add(q)
                 deduped.append(q)
         return deduped
+
+    def _parse_subtitles_from_search_table(
+        self,
+        html_content: bytes,
+        domain: str,
+        meta: VideoQueryMeta
+    ) -> List[SubtitleCandidate]:
+        """Extract subtitles directly from search results table without extra HTTP requests."""
+        soup = BeautifulSoup(html_content.decode("utf-8", "ignore"), "html.parser")
+        table = soup.select_one("table.tborder2") or soup.select_one("table.table")
+        if not table:
+            return []
+
+        candidates = []
+        rows = table.find_all("tr")
+
+        for row in rows:
+            first_td = row.find("td", class_="first")
+            if not first_td:
+                continue
+
+            sub_a = first_td.find("a")
+            if not sub_a or not sub_a.get("href"):
+                continue
+
+            title = sub_a.get("title") or sub_a.get_text(strip=True)
+            href = sub_a["href"]
+            m_id = re.search(r"/detail/(\d+)\.html", href)
+            sub_id = m_id.group(1) if m_id else href.split("/")[-1].replace(".html", "")
+            detail_url = f"{domain}/detail/{sub_id}.html"
+
+            # Episode filtering for TV series
+            if meta.is_tv and meta.episode is not None:
+                matches_ep, is_collection = is_episode_match(title, meta.season, meta.episode)
+                if not matches_ep:
+                    continue
+            else:
+                is_collection = False
+
+            tags = SubtitleTags(provider=self.name, collection=is_collection)
+
+            # Languages
+            tac_td = row.find("td", class_="tac")
+            img_tags = first_td.find_all("img") + (tac_td.find_all("img") if tac_td else [])
+            for img in img_tags:
+                alt = f"{img.get('alt', '')} {img.get('title', '')}"
+                if "双语" in alt:
+                    tags.bilingual = True
+                if "简体" in alt or "chs" in alt.lower():
+                    if "chs" not in tags.lang:
+                        tags.lang.append("chs")
+                if "繁体" in alt or "cht" in alt.lower():
+                    if "cht" not in tags.lang:
+                        tags.lang.append("cht")
+
+            if "双语" in title or "中英" in title:
+                tags.bilingual = True
+            if not tags.lang:
+                tags.lang.append("chs")
+
+            # Formats
+            fmt_span = first_td.find("span", class_="label-info")
+            if fmt_span:
+                for f in fmt_span.get_text(strip=True).lower().split("/"):
+                    f_clean = f.strip()
+                    if f_clean and f_clean not in tags.fmt:
+                        tags.fmt.append(f_clean)
+
+            # Rating stars
+            rate_val = 0.0
+            star_i = row.find("i", class_=lambda c: c and "rating-star" in c)
+            if star_i:
+                star_title = star_i.get("title", "")
+                m_score = re.search(r"(\d+(?:\.\d+)?)", star_title)
+                if m_score:
+                    rate_val = float(m_score.group(1)) / 2.0
+
+            # Downloads count
+            dl_count = 0
+            last_td = row.find("td", class_="last")
+            if last_td:
+                m_dl = re.search(r"(\d+)", last_td.get_text(strip=True))
+                if m_dl:
+                    dl_count = int(m_dl.group(1))
+
+            cand = SubtitleCandidate(
+                id=sub_id,
+                provider=self.name,
+                title=title,
+                page_url=detail_url,
+                tags=tags,
+                rate=rate_val,
+                downloads_count=dl_count
+            )
+            candidates.append(cand)
+
+        return candidates
 
     def _parse_works_from_search(
         self,
@@ -299,10 +413,9 @@ class ZimukuProvider(BaseProvider):
 
             title = sub_a.get_text(strip=True)
             href = sub_a["href"]
-            detail_url = urllib.parse.urljoin(domain, href)
-
             m_id = re.search(r"/detail/(\d+)\.html", href)
             sub_id = m_id.group(1) if m_id else href.split("/")[-1].replace(".html", "")
+            detail_url = f"{domain}/detail/{sub_id}.html"
 
             # Episode filtering for TV series
             if meta.is_tv and meta.episode is not None:

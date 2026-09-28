@@ -83,7 +83,9 @@ class CacheManager:
         return None
 
     def set_search_results(self, key: str, data: List[Dict[str, Any]]) -> None:
-        """Store search results in SQLite with current timestamp."""
+        """Store search results in SQLite with current timestamp. Do not cache empty results."""
+        if not data:
+            return
         now = int(time.time())
         conn = sqlite3.connect(self.db_path)
         try:

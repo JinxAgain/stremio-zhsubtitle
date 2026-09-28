@@ -222,4 +222,53 @@ def test_pick_best_file_season_pack_and_variants():
     assert best == "Walking.Dead.S09E09.1080p.chs.eng.简体&英文.srt"
 
 
+def test_empty_cache_invalidation_when_filename_provided():
+    """Verify that empty cache is rejected when filename or title is present."""
+    from app.api.subtitles import _is_cache_valid
+    from app.providers.base import VideoQueryMeta
+
+    # Empty cache without filename/title is valid (normal empty result)
+    meta_empty = VideoQueryMeta(imdb_id="tt12345", media_type="movie", filename="", title="")
+    assert _is_cache_valid([], meta_empty) is True
+
+    # Empty cache WITH filename must be invalidated so that the search can run
+    meta_with_fn = VideoQueryMeta(
+        imdb_id="tt12345",
+        media_type="movie",
+        filename="Movie.2026.1080p.mkv",
+        title="Movie"
+    )
+    assert _is_cache_valid([], meta_with_fn) is False
+
+
+def test_query_building_hygiene_for_tmdb_and_filename():
+    """Ensure providers never query 'tmdb:...' and fallback to filename when title is empty."""
+    from app.providers.zimuku import ZimukuProvider
+    from app.providers.subhd import SubhdProvider
+    from app.providers.base import VideoQueryMeta
+
+    zimuku = ZimukuProvider()
+    subhd = SubhdProvider()
+
+    # When imdb_id is tmdb:1083381 and title is empty but filename is present
+    meta = VideoQueryMeta(
+        imdb_id="tmdb:1083381",
+        media_type="movie",
+        title="",
+        filename="Backrooms-2026-1080p.mkv"
+    )
+
+    z_queries = zimuku._build_queries(meta)
+    s_queries = subhd._build_queries(meta)
+
+    # Neither provider should query 'tmdb:1083381'
+    assert "tmdb:1083381" not in z_queries
+    assert "tmdb:1083381" not in s_queries
+
+    # Both should have extracted the title from filename
+    assert "Backrooms" in z_queries
+    assert "Backrooms" in s_queries
+
+
+
 
