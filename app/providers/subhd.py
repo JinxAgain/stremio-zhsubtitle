@@ -68,8 +68,10 @@ class SubhdProvider(BaseProvider):
         for domain in all_endpoints:
             found_any = False
             for query_str in search_queries:
+                is_imdb_query = query_str.startswith("tt")
                 search_url = f"{domain}/search/{urllib.parse.quote(query_str)}"
                 logger.info(f"[SubHD] Searching {search_url}...")
+                new_found = 0
                 try:
                     resp = self.session.get(search_url, timeout=self.timeout)
                     if resp.status_code == 200:
@@ -77,9 +79,12 @@ class SubhdProvider(BaseProvider):
                         if items:
                             logger.info(f"[SubHD] Found {len(items)} subtitles for '{query_str}'")
                             for item in items:
+                                if is_imdb_query:
+                                    item.tags.imdb_matched = True
                                 if item.id not in seen_sids:
                                     seen_sids.add(item.id)
                                     candidates.append(item)
+                                    new_found += 1
                             found_any = True
                         else:
                             logger.info(f"[SubHD] No matching subtitles for '{query_str}'")
@@ -88,6 +93,10 @@ class SubhdProvider(BaseProvider):
                 except Exception as e:
                     logger.warning(f"[SubHD] Request failed for {search_url}: {e}")
                     continue
+
+                # If exact IMDb query succeeded, stop searching to avoid noisy/false title fallbacks!
+                if is_imdb_query and new_found > 0:
+                    break
 
                 # If specific query returned good matches, don't flood upstream
                 if found_any and len(candidates) >= 5:
@@ -253,69 +262,81 @@ class SubhdProvider(BaseProvider):
         return tags, dl_count
 
     def download(self, candidate: SubtitleCandidate) -> Tuple[Optional[bytes], str]:
-        """Download subtitle file from SubHD using the prepare-download -> down API token flow."""
+        """Download subtitle file from SubHD using the prepare-download -> down API token flow across mirrors."""
         sid = candidate.id
-        domain = f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
-        page_url = candidate.page_url or f"{domain}/a/{sid}"
+        orig_domain = (
+            f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
+            if candidate.page_url else self.base_url
+        )
+        candidate_domains = [orig_domain] + [u for u in self.fallback_urls if u != orig_domain]
 
-        logger.info(f"[SubHD] Preparing download for sid '{sid}' from {page_url}")
+        for domain in candidate_domains:
+            page_url = f"{domain}/a/{sid}"
+            logger.info(f"[SubHD] Preparing download for sid '{sid}' from {page_url}")
 
-        try:
-            # Step 1: POST prepare-download
-            prep_resp = self.session.post(
-                f"{domain}/api/sub/prepare-download",
-                json={"sid": sid},
-                headers={
-                    "Referer": page_url,
-                    "X-Requested-With": "XMLHttpRequest"
-                },
-                timeout=self.timeout
-            )
-            if prep_resp.status_code != 200:
-                logger.warning(f"[SubHD] prepare-download HTTP {prep_resp.status_code}")
-                return None, ""
+            try:
+                # Step 1: POST prepare-download
+                prep_resp = self.session.post(
+                    f"{domain}/api/sub/prepare-download",
+                    json={"sid": sid},
+                    headers={
+                        "Referer": page_url,
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    timeout=self.timeout
+                )
+                if prep_resp.status_code != 200:
+                    logger.warning(f"[SubHD] prepare-download on {domain} returned HTTP {prep_resp.status_code}")
+                    continue
 
-            prep_data = prep_resp.json()
-            if not prep_data.get("success"):
-                logger.warning(f"[SubHD] prepare-download failed: {prep_data.get('msg')}")
-                return None, ""
+                prep_data = prep_resp.json()
+                if not prep_data.get("success"):
+                    logger.warning(f"[SubHD] prepare-download on {domain} rejected: {prep_data.get('msg')}")
+                    continue
 
-            down_path = prep_data.get("url") or f"/down/{sid}"
-            down_url = down_path if down_path.startswith("http") else f"{domain}{down_path}"
+                down_path = prep_data.get("url") or f"/down/{sid}"
+                down_url = down_path if down_path.startswith("http") else f"{domain}{down_path}"
 
-            # Step 2: Visit temp page (essential before requesting /api/sub/down)
-            temp_resp = self.session.get(down_url, headers={"Referer": page_url}, timeout=self.timeout)
-            if temp_resp.status_code != 200:
-                return None, ""
+                # Step 2: Visit temp page (essential before requesting /api/sub/down)
+                temp_resp = self.session.get(down_url, headers={"Referer": page_url}, timeout=self.timeout)
+                if temp_resp.status_code != 200:
+                    logger.warning(f"[SubHD] visit temp down page on {domain} returned HTTP {temp_resp.status_code}")
+                    continue
 
-            # Step 3: POST /api/sub/down
-            api_resp = self.session.post(
-                f"{domain}/api/sub/down",
-                json={"sid": sid, "cap": ""},
-                headers={
-                    "Referer": down_url,
-                    "X-Requested-With": "XMLHttpRequest"
-                },
-                timeout=self.timeout
-            )
-            if api_resp.status_code != 200:
-                return None, ""
+                # Step 3: POST /api/sub/down
+                api_resp = self.session.post(
+                    f"{domain}/api/sub/down",
+                    json={"sid": sid, "cap": ""},
+                    headers={
+                        "Referer": down_url,
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    timeout=self.timeout
+                )
+                if api_resp.status_code != 200:
+                    logger.warning(f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}")
+                    continue
 
-            api_data = api_resp.json()
-            if not api_data.get("success") or not api_data.get("url"):
-                return None, ""
+                api_data = api_resp.json()
+                if not api_data.get("success") or not api_data.get("url"):
+                    logger.warning(f"[SubHD] /api/sub/down on {domain} rejected: {api_data.get('msg')}")
+                    continue
 
-            file_url = api_data.get("url")
-            if not file_url.startswith("http"):
-                file_url = f"{domain}{file_url}"
+                file_url = api_data.get("url")
+                if not file_url.startswith("http"):
+                    file_url = f"{domain}{file_url}"
 
-            # Step 4: Fetch actual archive bytes
-            file_resp = self.session.get(file_url, headers={"Referer": down_url}, timeout=25)
-            if file_resp.status_code == 200:
-                filename = self.extract_filename_from_response(file_resp, default=f"subhd_{sid}.zip")
-                return file_resp.content, filename
+                # Step 4: Fetch actual archive bytes
+                file_resp = self.session.get(file_url, headers={"Referer": down_url}, timeout=25)
+                if file_resp.status_code == 200:
+                    filename = self.extract_filename_from_response(file_resp, default=f"subhd_{sid}.zip")
+                    return file_resp.content, filename
+                else:
+                    logger.warning(f"[SubHD] File download from {file_url} failed with HTTP {file_resp.status_code}")
 
-        except Exception as e:
-            logger.error(f"[SubHD] Download error for {sid}: {e}")
+            except Exception as e:
+                logger.warning(f"[SubHD] Download error on mirror {domain} for {sid}: {e}")
+                continue
 
+        logger.error(f"[SubHD] All mirror endpoints failed downloading sid '{sid}'")
         return None, ""

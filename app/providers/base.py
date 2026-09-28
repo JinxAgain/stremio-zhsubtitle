@@ -136,6 +136,7 @@ class SubtitleTags:
     fansub: str = ""
     uploader: str = ""
     collection: bool = False
+    imdb_matched: bool = False
 
 
 @dataclass

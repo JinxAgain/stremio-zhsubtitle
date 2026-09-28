@@ -198,6 +198,7 @@ class ZimukuProvider(BaseProvider):
             found_any = False
             domain_dead = False
             for query_str in search_queries:
+                is_imdb_query = query_str.startswith("tt")
                 search_url = f"{domain}/search?q={urllib.parse.quote(query_str)}"
                 logger.info(f"[Zimuku] Searching {search_url}...")
                 resp = self._fetch_page(search_url)
@@ -208,23 +209,34 @@ class ZimukuProvider(BaseProvider):
                 if resp.status_code != 200:
                     continue
 
+                new_found = 0
                 # 1. Parse direct subtitles table from search page
                 table_items = self._parse_subtitles_from_search_table(resp.content, domain, meta)
                 if table_items:
                     for sub in table_items:
+                        if is_imdb_query:
+                            sub.tags.imdb_matched = True
                         if sub.id not in seen_ids:
                             seen_ids.add(sub.id)
                             candidates.append(sub)
+                            new_found += 1
                     found_any = True
 
                 # 2. Check work items (top series or film cards)
                 work_items = self._parse_works_from_search(resp.content, domain, meta)
                 if work_items:
                     for sub in work_items:
+                        if is_imdb_query:
+                            sub.tags.imdb_matched = True
                         if sub.id not in seen_ids:
                             seen_ids.add(sub.id)
                             candidates.append(sub)
+                            new_found += 1
                     found_any = True
+
+                # If exact IMDb query succeeded, stop searching to avoid noisy/false title fallbacks!
+                if is_imdb_query and new_found > 0:
+                    break
 
                 # If season-specific query succeeded, don't need broad search
                 if found_any and meta.is_tv and meta.season:
@@ -248,21 +260,27 @@ class ZimukuProvider(BaseProvider):
                 if not meta.year and fn_year:
                     meta.year = fn_year
 
+        is_tt_imdb = bool(meta.imdb_id and meta.imdb_id.startswith("tt"))
+
         if meta.is_tv and meta.season:
             cn_s = to_cn_season(meta.season)
+            # 1. Primary: Exact IMDb ID
+            if is_tt_imdb:
+                queries.append(meta.imdb_id)
+            # 2. Fallbacks: Season title queries
             if clean_title:
                 queries.append(f"{clean_title} {cn_s}")
                 queries.append(f"{clean_title} Season {meta.season}")
                 queries.append(clean_title)
-            if meta.season == 1 and meta.imdb_id and meta.imdb_id.startswith("tt"):
-                queries.append(meta.imdb_id)
         else:
+            # 1. Primary: Exact IMDb ID
+            if is_tt_imdb:
+                queries.append(meta.imdb_id)
+            # 2. Fallbacks: Title & Year
             if clean_title:
                 if meta.year:
                     queries.append(f"{clean_title} {meta.year}")
                 queries.append(clean_title)
-            if meta.imdb_id and meta.imdb_id.startswith("tt"):
-                queries.append(meta.imdb_id)
 
         # Deduplicate
         seen = set()
@@ -504,40 +522,49 @@ class ZimukuProvider(BaseProvider):
         return candidates
 
     def download(self, candidate: SubtitleCandidate) -> Tuple[Optional[bytes], str]:
-        """Download subtitle archive from Zimuku mirrors."""
-        logger.info(f"[Zimuku] Fetching detail page {candidate.page_url}")
-        resp = self._fetch_page(candidate.page_url)
-        if not resp or resp.status_code != 200:
-            return None, ""
+        """Download subtitle archive from Zimuku mirrors with failover."""
+        orig_domain = (
+            f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
+            if candidate.page_url else self.base_url
+        )
+        all_domains = [orig_domain] + [u for u in [self.base_url] + self.fallback_urls if u != orig_domain]
+        path = urllib.parse.urlparse(candidate.page_url).path if candidate.page_url else f"/detail/{candidate.id}.html"
 
-        parsed_domain = f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
-        soup = BeautifulSoup(resp.content.decode("utf-8", "ignore"), "html.parser")
-        dl_sub = soup.find("li", class_="dlsub")
-        if not dl_sub or not dl_sub.a:
-            return None, ""
-
-        dl_url = self._normalize_url(parsed_domain, dl_sub.a["href"])
-        dl_page_resp = self._fetch_page(dl_url, referer=candidate.page_url)
-        if not dl_page_resp or dl_page_resp.status_code != 200:
-            return None, ""
-
-        dl_soup = BeautifulSoup(dl_page_resp.content.decode("utf-8", "ignore"), "html.parser")
-        links_box = dl_soup.find("div", class_="clearfix")
-        if not links_box:
-            return None, ""
-
-        links = links_box.find_all("a", href=True)
-        for a in links:
-            file_url = self._normalize_url(parsed_domain, a["href"])
-            try:
-                file_resp = self.session.get(file_url, headers={"Referer": dl_url}, timeout=25)
-                if file_resp.status_code == 200 and len(file_resp.content) >= FILE_MIN_SIZE:
-                    filename = self.extract_filename_from_response(
-                        file_resp, default=f"zimuku_{candidate.id}.zip"
-                    )
-                    return file_resp.content, filename
-            except Exception as e:
-                logger.debug(f"[Zimuku] Mirror download error: {e}")
+        for domain in all_domains:
+            detail_url = f"{domain}{path}"
+            logger.info(f"[Zimuku] Fetching detail page {detail_url}")
+            resp = self._fetch_page(detail_url)
+            if not resp or resp.status_code != 200:
+                logger.warning(f"[Zimuku] Detail page {detail_url} unavailable")
                 continue
+
+            soup = BeautifulSoup(resp.content.decode("utf-8", "ignore"), "html.parser")
+            dl_sub = soup.find("li", class_="dlsub")
+            if not dl_sub or not dl_sub.a:
+                continue
+
+            dl_url = self._normalize_url(domain, dl_sub.a["href"])
+            dl_page_resp = self._fetch_page(dl_url, referer=detail_url)
+            if not dl_page_resp or dl_page_resp.status_code != 200:
+                continue
+
+            dl_soup = BeautifulSoup(dl_page_resp.content.decode("utf-8", "ignore"), "html.parser")
+            links_box = dl_soup.find("div", class_="clearfix")
+            if not links_box:
+                continue
+
+            links = links_box.find_all("a", href=True)
+            for a in links:
+                file_url = self._normalize_url(domain, a["href"])
+                try:
+                    file_resp = self.session.get(file_url, headers={"Referer": dl_url}, timeout=25)
+                    if file_resp.status_code == 200 and len(file_resp.content) >= FILE_MIN_SIZE:
+                        filename = self.extract_filename_from_response(
+                            file_resp, default=f"zimuku_{candidate.id}.zip"
+                        )
+                        return file_resp.content, filename
+                except Exception as e:
+                    logger.debug(f"[Zimuku] Mirror download error: {e}")
+                    continue
 
         return None, ""

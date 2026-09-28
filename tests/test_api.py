@@ -270,5 +270,51 @@ def test_query_building_hygiene_for_tmdb_and_filename():
     assert "Backrooms" in s_queries
 
 
+def test_imdb_priority_and_year_mismatch_penalty():
+    """Verify IMDb ID is prioritized first and conflicting years are heavily penalized."""
+    from app.providers.zimuku import ZimukuProvider
+    from app.providers.subhd import SubhdProvider
+    from app.providers.base import VideoQueryMeta, SubtitleCandidate, SubtitleTags
+    from app.core.scorer import SubtitleScorer
+
+    zimuku = ZimukuProvider()
+    subhd = SubhdProvider()
+
+    meta = VideoQueryMeta(
+        imdb_id="tt31349844",
+        media_type="movie",
+        title="Runner",
+        year=2026
+    )
+
+    z_queries = zimuku._build_queries(meta)
+    s_queries = subhd._build_queries(meta)
+
+    # 1. IMDb ID MUST be the first query in both providers
+    assert z_queries[0] == "tt31349844"
+    assert s_queries[0] == "tt31349844"
+
+    # 2. Year mismatch penalty test
+    c_exact = SubtitleCandidate(
+        id="c1",
+        provider="subhd",
+        title="Runner.2026.1080p.WEB-DL",
+        page_url="",
+        tags=SubtitleTags(imdb_matched=True, bilingual=True)
+    )
+    c_wrong_year = SubtitleCandidate(
+        id="c2",
+        provider="zimuku",
+        title="Blade.Runner.2049.2017.1080p.BluRay",
+        page_url="",
+        tags=SubtitleTags(imdb_matched=False, bilingual=True)
+    )
+
+    ranked = SubtitleScorer.rank_candidates([c_wrong_year, c_exact], meta)
+    assert ranked[0].id == "c1"
+    assert c_exact.score > 1500
+    assert c_wrong_year.score < 0
+
+
 
 

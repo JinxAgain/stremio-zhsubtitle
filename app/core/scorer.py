@@ -51,7 +51,21 @@ class SubtitleScorer:
         score = 0.0
         title_lower = candidate.title.lower()
 
-        # 1. Episode matching for TV series
+        # 1. IMDb exact match bonus
+        if candidate.tags.imdb_matched:
+            score += 1000.0
+
+        # 2. Release year verification
+        if query.year:
+            cand_years = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", title_lower)]
+            cand_years = [y for y in cand_years if y not in (1080, 2160)]
+            if cand_years:
+                if any(abs(y - query.year) <= 1 for y in cand_years):
+                    score += 150.0
+                elif not candidate.tags.imdb_matched:
+                    score -= 1500.0
+
+        # 3. Episode matching for TV series
         if query.is_tv and query.episode is not None:
             ep = query.episode
             s = query.season

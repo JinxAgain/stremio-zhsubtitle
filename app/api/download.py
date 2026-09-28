@@ -84,7 +84,7 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
         raise HTTPException(status_code=400, detail=f"Unknown subtitle provider: {provider}")
 
     if not archive_bytes:
-        logger.warning(f"[Download] Failed to download {sub_id} from {provider}")
+        logger.warning(f"[Download] Failed to download {sub_id} from {provider} (file: {filename})")
         raise HTTPException(status_code=404, detail="Upstream subtitle download failed")
 
     # 3. Unpack archive and extract matching episode file
