@@ -51,11 +51,20 @@ class SubtitleScorer:
         score = 0.0
         title_lower = candidate.title.lower()
 
-        # 1. IMDb exact match bonus
+        # 1. Provider health & rate-limit check
+        if candidate.provider == "subhd":
+            try:
+                from ..providers.subhd import SubhdProvider
+                if SubhdProvider.is_rate_limited():
+                    score -= 2000.0
+            except Exception:
+                pass
+
+        # 2. IMDb exact match bonus
         if candidate.tags.imdb_matched:
             score += 1000.0
 
-        # 2. Release year verification
+        # 3. Release year verification
         if query.year:
             cand_years = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", title_lower)]
             cand_years = [y for y in cand_years if y not in (1080, 2160)]

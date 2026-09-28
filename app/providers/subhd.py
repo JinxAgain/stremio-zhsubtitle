@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,6 +43,21 @@ class SubhdProvider(BaseProvider):
     """SubHD subtitle provider supporting IMDb ID queries and token-based download flow."""
 
     name: str = "subhd"
+    _rate_limited_until: float = 0.0
+
+    @classmethod
+    def mark_rate_limited(cls, duration_seconds: int = 600):
+        """Flag that SubHD is currently enforcing an IP-level download frequency limit."""
+        cls._rate_limited_until = time.time() + duration_seconds
+        logger.warning(
+            f"[SubHD] IP rate limit detected ('下载频率过高'). "
+            f"Demoting SubHD in candidate ranking for next {duration_seconds // 60} minutes."
+        )
+
+    @classmethod
+    def is_rate_limited(cls) -> bool:
+        """Check if SubHD is currently marked as rate limited."""
+        return time.time() < cls._rate_limited_until
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
@@ -325,14 +341,22 @@ class SubhdProvider(BaseProvider):
                     timeout=self.timeout
                 )
                 if api_resp.status_code != 200:
+                    err_msg = api_resp.text[:150]
                     logger.warning(
-                        f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}: {api_resp.text[:150]}"
+                        f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}: {err_msg}"
                     )
+                    if "频率过高" in err_msg:
+                        cls = self.__class__
+                        cls.mark_rate_limited(600)
                     continue
 
                 api_data = api_resp.json()
                 if not api_data.get("success") or not api_data.get("url"):
-                    logger.warning(f"[SubHD] /api/sub/down on {domain} rejected: {api_data.get('msg')}")
+                    rej_msg = str(api_data.get('msg', ''))
+                    logger.warning(f"[SubHD] /api/sub/down on {domain} rejected: {rej_msg}")
+                    if "频率过高" in rej_msg:
+                        cls = self.__class__
+                        cls.mark_rate_limited(600)
                     continue
 
                 file_url = api_data.get("url")
