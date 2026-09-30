@@ -421,6 +421,32 @@ def test_scorer_penalizes_season_mismatch():
     assert c_s1.score < 0
 
 
+def test_is_direct_subtitle_detection():
+    """Verify is_direct_subtitle accurately identifies direct subtitle files vs archives."""
+    from app.core.extractor import is_direct_subtitle
+
+    # Standalone SRT file with extension
+    srt_content = b"1\n00:00:01,000 --> 00:00:04,000\nHello\n"
+    assert is_direct_subtitle(srt_content, "1790743483036.srt") is True
+
+    # Standalone SRT content even if misnamed as .bin or .tmp
+    assert is_direct_subtitle(srt_content, "download.bin") is True
+
+    # Standalone ASS file
+    ass_content = b"[Script Info]\nTitle: Test\n[Events]\nDialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Hello\n"
+    assert is_direct_subtitle(ass_content, "subtitle.ass") is True
+    assert is_direct_subtitle(ass_content, "unknown_file") is True
+
+    # Real ZIP archive
+    zip_bytes = b"PK\x03\x04\x14\x00\x00\x00..."
+    assert is_direct_subtitle(zip_bytes, "archive.zip") is False
+
+    # Real RAR archive
+    rar_bytes = b"Rar!\x1a\x07\x01\x00?+\x1aH..."
+    assert is_direct_subtitle(rar_bytes, "1790768090074.rar") is False
+
+
+
 
 
 

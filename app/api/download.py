@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Response
 from ..cache.manager import cache_manager
 from ..config import settings
 from ..core.cleaner import SubtitleCleaner
-from ..core.extractor import SubtitleExtractor
+from ..core.extractor import SubtitleExtractor, is_direct_subtitle
 from ..providers.base import SubtitleCandidate
 from ..providers.subhd import SubhdProvider
 from ..providers.zimuku import ZimukuProvider
@@ -97,34 +97,32 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
         raise HTTPException(status_code=404, detail="Upstream subtitle download failed")
 
     target_ep = episode_num if episode_num > 0 else None
-    logger.info(
-        f"[Download] Successfully fetched '{raw_filename}' from {provider} ({len(archive_bytes)} bytes). "
-        f"Extracting target episode {target_ep}..."
-    )
 
-    # 3. Unpack archive and extract matching episode file
-    sub_bytes, sub_name = SubtitleExtractor.extract_best_subtitle(
-        archive_bytes,
-        raw_filename,
-        episode=target_ep
-    )
-
-    if not sub_bytes:
-        # Check if the content is binary archive rather than direct subtitle file
-        lower_name = raw_filename.lower()
-        is_archive = (
-            lower_name.endswith((".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz"))
-            or archive_bytes[:4] in (b"Rar!", b"PK\x03\x04", b"7z\xbc\xaf")
+    # 3. Check if upstream file is directly a subtitle (SRT, ASS, VTT) rather than an archive
+    if is_direct_subtitle(archive_bytes, raw_filename):
+        logger.info(
+            f"[Download] Upstream file '{raw_filename}' is directly a subtitle file "
+            f"({len(archive_bytes)} bytes). Bypassing archive unpack."
         )
-        if is_archive:
+        sub_bytes, sub_name = archive_bytes, raw_filename
+    else:
+        logger.info(
+            f"[Download] Successfully fetched archive '{raw_filename}' from {provider} ({len(archive_bytes)} bytes). "
+            f"Extracting target episode {target_ep}..."
+        )
+        sub_bytes, sub_name = SubtitleExtractor.extract_best_subtitle(
+            archive_bytes,
+            raw_filename,
+            episode=target_ep
+        )
+
+        if not sub_bytes:
             logger.error(
                 f"[Download] Failed to unpack archive '{raw_filename}' for {provider}:{sub_id} (target ep={target_ep})"
             )
             raise HTTPException(status_code=502, detail="Failed to extract subtitle from archive")
-        logger.info(f"[Download] Upstream file '{raw_filename}' is direct subtitle, bypassing archive unpack.")
-        sub_bytes, sub_name = archive_bytes, raw_filename
-    else:
-        logger.info(f"[Download] Extracted best candidate '{sub_name}' ({len(sub_bytes)} bytes) from archive.")
+        else:
+            logger.info(f"[Download] Extracted best candidate '{sub_name}' ({len(sub_bytes)} bytes) from archive.")
 
     # 4. Clean tags, remove ASS drawing/positioning codes, and normalize to UTF-8 SRT
     logger.info(f"[Download] Normalizing '{sub_name}' ({len(sub_bytes)} bytes) to clean UTF-8 SRT...")

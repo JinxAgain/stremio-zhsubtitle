@@ -26,6 +26,37 @@ BILINGUAL_REGEX = re.compile(
 )
 
 
+def is_direct_subtitle(content_bytes: bytes, filename: str = "") -> bool:
+    """
+    Determine if content is directly a subtitle file (SRT, ASS, SSA, VTT),
+    even if misnamed or without extension.
+    """
+    if not content_bytes or len(content_bytes) < 10:
+        return False
+
+    # 1. Reject known binary archive magic bytes
+    if content_bytes[:4] in (b"PK\x03\x04", b"Rar!", b"7z\xbc\xaf") or content_bytes[:2] == b"\x1f\x8b":
+        return False
+    if len(content_bytes) > 262 and content_bytes[257:262] == b"ustar":
+        return False
+
+    # 2. Check standard subtitle file extensions
+    ext = os.path.splitext(filename.lower())[1]
+    if ext in SUBTITLE_EXTENSIONS:
+        return True
+
+    # 3. Content-based signature inspection (detect SRT/VTT/ASS text cues)
+    sample = content_bytes[:4096]
+    if b"-->" in sample:
+        return True
+    if b"[Script Info]" in sample or b"Dialogue:" in sample or b"Format:" in sample:
+        return True
+    if b"WEBVTT" in sample:
+        return True
+
+    return False
+
+
 def fix_archive_filename(raw_name: str) -> str:
     """Recover GBK / GB18030 encoded filenames misdecoded as CP437 by standard zip utilities."""
     try:
@@ -72,9 +103,8 @@ class SubtitleExtractor:
             except Exception as e:
                 logger.warning(f"Gzip extraction failed: {e}")
 
-        # Case 2: Standalone subtitle file
-        ext = os.path.splitext(lower_name)[1]
-        if ext in SUBTITLE_EXTENSIONS:
+        # Case 2: Standalone subtitle file (by extension or content inspection)
+        if is_direct_subtitle(content_bytes, original_filename):
             return content_bytes, original_filename
 
         # Case 3: ZIP Archive (pure in-memory extraction)
