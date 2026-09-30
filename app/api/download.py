@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Response
 from ..cache.manager import cache_manager
 from ..config import settings
 from ..core.cleaner import SubtitleCleaner
-from ..core.extractor import SubtitleExtractor, is_direct_subtitle
+from ..core.extractor import SUBTITLE_EXTENSIONS, SubtitleExtractor
 from ..providers.base import SubtitleCandidate
 from ..providers.subhd import SubhdProvider
 from ..providers.zimuku import ZimukuProvider
@@ -99,7 +99,7 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
     target_ep = episode_num if episode_num > 0 else None
 
     # 3. Check if upstream file is directly a subtitle (SRT, ASS, VTT) rather than an archive
-    if is_direct_subtitle(archive_bytes, raw_filename):
+    if raw_filename.lower().endswith(SUBTITLE_EXTENSIONS):
         logger.info(
             f"[Download] Upstream file '{raw_filename}' is directly a subtitle file "
             f"({len(archive_bytes)} bytes). Bypassing archive unpack."

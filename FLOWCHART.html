@@ -520,7 +520,7 @@
             <span class="tag tag-blue">SubtitleExtractor</span>
           </div>
           <ul class="step-list">
-            <li><b>直链字幕智能旁路:</b> 若上游返回的是独立字幕 (<code>.srt/.ass</code>) 或纯文本流，自动触发 <code>is_direct_subtitle</code> 零解压直通清洗阶段。</li>
+            <li><b>直链字幕智能旁路:</b> 若上游返回的是独立字幕 (<code>.srt/.ass/.vtt</code>)，零解压直接进入清洗阶段，避免无谓解压开销。</li>
             <li><b>SubHD / Zimuku 动态拉取:</b> 模拟前端 AJAX 抓取动态下载 Token，跟随 302 重定向下载原始压缩包。</li>
             <li><b>内存原生极速解压:</b> ZIP 格式采用纯内存流解压，避免磁盘 I/O 开销；支持 7z/RAR/多层嵌套展开。</li>
           </ul>

@@ -26,37 +26,6 @@ BILINGUAL_REGEX = re.compile(
 )
 
 
-def is_direct_subtitle(content_bytes: bytes, filename: str = "") -> bool:
-    """
-    Determine if content is directly a subtitle file (SRT, ASS, SSA, VTT),
-    even if misnamed or without extension.
-    """
-    if not content_bytes or len(content_bytes) < 10:
-        return False
-
-    # 1. Reject known binary archive magic bytes
-    if content_bytes[:4] in (b"PK\x03\x04", b"Rar!", b"7z\xbc\xaf") or content_bytes[:2] == b"\x1f\x8b":
-        return False
-    if len(content_bytes) > 262 and content_bytes[257:262] == b"ustar":
-        return False
-
-    # 2. Check standard subtitle file extensions
-    ext = os.path.splitext(filename.lower())[1]
-    if ext in SUBTITLE_EXTENSIONS:
-        return True
-
-    # 3. Content-based signature inspection (detect SRT/VTT/ASS text cues)
-    sample = content_bytes[:4096]
-    if b"-->" in sample:
-        return True
-    if b"[Script Info]" in sample or b"Dialogue:" in sample or b"Format:" in sample:
-        return True
-    if b"WEBVTT" in sample:
-        return True
-
-    return False
-
-
 def fix_archive_filename(raw_name: str) -> str:
     """Recover GBK / GB18030 encoded filenames misdecoded as CP437 by standard zip utilities."""
     try:
@@ -103,8 +72,8 @@ class SubtitleExtractor:
             except Exception as e:
                 logger.warning(f"Gzip extraction failed: {e}")
 
-        # Case 2: Standalone subtitle file (by extension or content inspection)
-        if is_direct_subtitle(content_bytes, original_filename):
+        # Case 2: Standalone subtitle file
+        if lower_name.endswith(SUBTITLE_EXTENSIONS):
             return content_bytes, original_filename
 
         # Case 3: ZIP Archive (pure in-memory extraction)
@@ -220,7 +189,9 @@ class SubtitleExtractor:
             unpacked = False
 
             # 1. Try unar CLI (supports all RAR / RAR5 / 7Z / ZIP formats on Linux without non-free dependencies)
-            exe_unar = shutil.which("unar")
+            exe_unar = shutil.which("unar") or (
+                candidate if os.path.isfile(candidate := os.path.join("data", "bin", "unar")) else None
+            )
             if exe_unar:
                 try:
                     res = subprocess.run(
@@ -230,49 +201,95 @@ class SubtitleExtractor:
                     )
                     if res.returncode == 0:
                         unpacked = True
+                    else:
+                        logger.warning(
+                            f"[Extractor] unar failed with code {res.returncode}: "
+                            f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
+                        )
                 except Exception as e:
-                    logger.warning(f"unar extraction failed: {e}")
+                    logger.warning(f"[Extractor] unar extraction failed: {e}")
 
-            # 2. Try 7-Zip CLI if present
+            # 2. Try 7-Zip CLI (7zz on modern Linux, 7z/7za, or Windows standard locations)
+            exe_7z = None
             if not unpacked:
-                exe_7z = shutil.which("7z") or shutil.which("7za")
+                exe_7z = shutil.which("7zz") or shutil.which("7z") or shutil.which("7za")
                 if not exe_7z:
-                    for candidate in (r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"):
+                    candidates = (
+                        "/usr/bin/7zz",
+                        "/usr/local/bin/7zz",
+                        "/usr/bin/7z",
+                        os.path.join("data", "bin", "7zz"),
+                        r"C:\Program Files\7-Zip\7z.exe",
+                        r"C:\Program Files (x86)\7-Zip\7z.exe"
+                    )
+                    for candidate in candidates:
                         if os.path.isfile(candidate):
                             exe_7z = candidate
                             break
                 if exe_7z:
                     try:
-                        res = subprocess.run([exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
-                                             capture_output=True, timeout=30)
+                        res = subprocess.run(
+                            [exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
+                            capture_output=True,
+                            timeout=30
+                        )
                         if res.returncode == 0:
                             unpacked = True
-                    except Exception:
-                        pass
+                        else:
+                            logger.warning(
+                                f"[Extractor] 7-Zip failed with code {res.returncode}: "
+                                f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[Extractor] 7-Zip extraction failed: {e}")
 
-            # 3. Try py7zr
+            # 3. Try native unrar CLI for RAR files if available
+            if not unpacked and original_filename.lower().endswith(".rar"):
+                exe_unrar = shutil.which("unrar") or (
+                    candidate if os.path.isfile(candidate := os.path.join("data", "bin", "unrar")) else None
+                )
+                if exe_unrar:
+                    try:
+                        res = subprocess.run(
+                            [exe_unrar, "x", "-y", "-o+", archive_path, extract_dest + os.sep],
+                            capture_output=True,
+                            timeout=30
+                        )
+                        if res.returncode == 0:
+                            unpacked = True
+                        else:
+                            logger.warning(
+                                f"[Extractor] unrar failed with code {res.returncode}: "
+                                f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[Extractor] unrar extraction failed: {e}")
+
+            # 4. Try py7zr
             if not unpacked and original_filename.lower().endswith(".7z"):
                 try:
                     import py7zr
                     with py7zr.SevenZipFile(archive_path, mode="r") as z:
                         z.extractall(extract_dest)
                     unpacked = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[Extractor] py7zr extraction failed: {e}")
 
-            # 4. Try rarfile
+            # 5. Try rarfile module
             if not unpacked and original_filename.lower().endswith(".rar"):
                 try:
                     import rarfile
                     if exe_unar:
                         rarfile.UNRAR_TOOL = exe_unar
+                    elif exe_7z:
+                        rarfile.UNRAR_TOOL = exe_7z
                     with rarfile.RarFile(archive_path) as rf:
                         rf.extractall(extract_dest)
                     unpacked = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[Extractor] rarfile extraction failed: {e}")
 
-            # 5. Try tarfile
+            # 6. Try tarfile
             if not unpacked:
                 try:
                     import tarfile
@@ -282,13 +299,28 @@ class SubtitleExtractor:
                 except Exception:
                     pass
 
-            # 6. Fallback to shutil.unpack_archive
+            # 7. Fallback to shutil.unpack_archive
             if not unpacked:
                 try:
                     shutil.unpack_archive(archive_path, extract_dest)
                     unpacked = True
                 except Exception:
                     pass
+
+            if not unpacked:
+                available_tools = []
+                if exe_unar:
+                    available_tools.append(f"unar ({exe_unar})")
+                if exe_7z:
+                    available_tools.append(f"7z ({exe_7z})")
+                if shutil.which("unrar"):
+                    available_tools.append(f"unrar ({shutil.which('unrar')})")
+                logger.error(
+                    f"[Extractor] Failed to unpack generic archive '{original_filename}'. "
+                    f"Available tools: {available_tools or 'None'}. "
+                    f"For RAR archives, install 'unar' or 'p7zip-full' (e.g. apt-get install -y unar p7zip-full) "
+                    f"or deploy using Docker."
+                )
 
             if unpacked:
                 found_files: Dict[str, str] = {}
