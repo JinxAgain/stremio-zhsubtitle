@@ -76,3 +76,23 @@ def test_zimuku_unhealthy_cooldown():
     ZimukuProvider.mark_domain_unhealthy(domain, cooldown_secs=30)
     assert ZimukuProvider.is_domain_healthy(domain) is False
 
+
+def test_subhd_cooldown_and_rate_limit():
+    from app.providers.subhd import SubhdProvider
+
+    domain = "https://failing-subhd-mirror.com"
+    assert SubhdProvider.is_domain_healthy(domain) is True
+
+    SubhdProvider.mark_domain_unhealthy(domain, cooldown_secs=30)
+    assert SubhdProvider.is_domain_healthy(domain) is False
+
+    # Test rate limit trigger
+    SubhdProvider._rate_limited_until = 0.0
+    assert SubhdProvider.is_rate_limited() is False
+
+    SubhdProvider.mark_rate_limited(duration_seconds=300, reason="Test 403")
+    assert SubhdProvider.is_rate_limited() is True
+    # Reset for other tests
+    SubhdProvider._rate_limited_until = 0.0
+
+

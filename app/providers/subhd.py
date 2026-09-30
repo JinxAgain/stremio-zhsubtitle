@@ -39,6 +39,9 @@ SOURCE_BADGE_MAP = {
 }
 
 
+_unhealthy_subhd_domains: Dict[str, float] = {}
+
+
 class SubhdProvider(BaseProvider):
     """SubHD subtitle provider supporting IMDb ID queries and token-based download flow."""
 
@@ -46,11 +49,11 @@ class SubhdProvider(BaseProvider):
     _rate_limited_until: float = 0.0
 
     @classmethod
-    def mark_rate_limited(cls, duration_seconds: int = 600):
-        """Flag that SubHD is currently enforcing an IP-level download frequency limit."""
+    def mark_rate_limited(cls, duration_seconds: int = 600, reason: str = "下载频率过高 / 403 Forbidden"):
+        """Flag that SubHD is currently enforcing an IP-level download limit or block."""
         cls._rate_limited_until = time.time() + duration_seconds
         logger.warning(
-            f"[SubHD] IP rate limit detected ('下载频率过高'). "
+            f"[SubHD] IP rate limit or block detected ({reason}). "
             f"Demoting SubHD in candidate ranking for next {duration_seconds // 60} minutes."
         )
 
@@ -58,6 +61,17 @@ class SubhdProvider(BaseProvider):
     def is_rate_limited(cls) -> bool:
         """Check if SubHD is currently marked as rate limited."""
         return time.time() < cls._rate_limited_until
+
+    @classmethod
+    def is_domain_healthy(cls, domain: str) -> bool:
+        """Check if a mirror domain is currently healthy or in cooldown."""
+        return _unhealthy_subhd_domains.get(domain, 0) < time.time()
+
+    @classmethod
+    def mark_domain_unhealthy(cls, domain: str, cooldown_secs: int = 600):
+        """Put a failing or timed-out mirror domain into temporary cooldown."""
+        _unhealthy_subhd_domains[domain] = time.time() + cooldown_secs
+        logger.warning(f"[SubHD] Marking mirror {domain} as unhealthy for {cooldown_secs}s")
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
@@ -77,7 +91,12 @@ class SubhdProvider(BaseProvider):
         if not search_queries:
             return []
 
-        all_endpoints = [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+        all_endpoints = [
+            d for d in [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+            if self.is_domain_healthy(d)
+        ]
+        if not all_endpoints:
+            all_endpoints = [self.base_url]
         candidates: List[SubtitleCandidate] = []
         seen_sids = set()
 
@@ -104,8 +123,16 @@ class SubhdProvider(BaseProvider):
                             found_any = True
                         else:
                             logger.info(f"[SubHD] No matching subtitles for '{query_str}'")
+                    elif resp.status_code == 403:
+                        logger.warning(f"[SubHD] GET {search_url} returned 403 Forbidden. IP may be blocked.")
+                        self.mark_rate_limited(600, reason=f"HTTP 403 Forbidden on {domain}/search")
                     else:
                         logger.warning(f"[SubHD] GET {search_url} returned status {resp.status_code}")
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    logger.warning(f"[SubHD] Request failed for {search_url} ({type(e).__name__}): {e}")
+                    if domain != self.base_url:
+                        self.mark_domain_unhealthy(domain, cooldown_secs=600)
+                    continue
                 except Exception as e:
                     logger.warning(f"[SubHD] Request failed for {search_url}: {e}")
                     continue
@@ -284,7 +311,14 @@ class SubhdProvider(BaseProvider):
             f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
             if candidate.page_url else self.base_url
         )
-        candidate_domains = [orig_domain] + [u for u in self.fallback_urls if u != orig_domain]
+        candidate_domains = [
+            d for d in [orig_domain] + [u for u in self.fallback_urls if u != orig_domain]
+            if self.is_domain_healthy(d)
+        ]
+        if not candidate_domains:
+            candidate_domains = [orig_domain]
+
+        had_403_or_ratelimit = False
 
         for domain in candidate_domains:
             page_url = f"{domain}/a/{sid}"
@@ -312,13 +346,22 @@ class SubhdProvider(BaseProvider):
                     headers=ajax_headers,
                     timeout=self.timeout
                 )
+                if prep_resp.status_code == 403:
+                    logger.warning(f"[SubHD] prepare-download on {domain} returned HTTP 403 Forbidden")
+                    had_403_or_ratelimit = True
+                    self.mark_rate_limited(600, reason=f"HTTP 403 on {domain}/prepare-download")
+                    continue
                 if prep_resp.status_code != 200:
                     logger.warning(f"[SubHD] prepare-download on {domain} returned HTTP {prep_resp.status_code}")
                     continue
 
                 prep_data = prep_resp.json()
                 if not prep_data.get("success"):
-                    logger.warning(f"[SubHD] prepare-download on {domain} rejected: {prep_data.get('msg')}")
+                    rej_msg = str(prep_data.get('msg', ''))
+                    logger.warning(f"[SubHD] prepare-download on {domain} rejected: {rej_msg}")
+                    if "频率过高" in rej_msg:
+                        had_403_or_ratelimit = True
+                        self.mark_rate_limited(600, reason="频率过高 on prepare-download")
                     continue
 
                 down_path = prep_data.get("url") or f"/down/{sid}"
@@ -326,6 +369,11 @@ class SubhdProvider(BaseProvider):
 
                 # Step 2: Visit temp page (essential before requesting /api/sub/down)
                 temp_resp = self.session.get(down_url, headers={"Referer": page_url}, timeout=self.timeout)
+                if temp_resp.status_code == 403:
+                    logger.warning(f"[SubHD] visit temp down page on {domain} returned HTTP 403 Forbidden")
+                    had_403_or_ratelimit = True
+                    self.mark_rate_limited(600, reason=f"HTTP 403 on {domain} temp page")
+                    continue
                 if temp_resp.status_code != 200:
                     logger.warning(f"[SubHD] visit temp down page on {domain} returned HTTP {temp_resp.status_code}")
                     continue
@@ -340,14 +388,19 @@ class SubhdProvider(BaseProvider):
                     headers=down_headers,
                     timeout=self.timeout
                 )
+                if api_resp.status_code == 403:
+                    logger.warning(f"[SubHD] /api/sub/down on {domain} returned HTTP 403 Forbidden")
+                    had_403_or_ratelimit = True
+                    self.mark_rate_limited(600, reason=f"HTTP 403 on {domain}/api/sub/down")
+                    continue
                 if api_resp.status_code != 200:
                     err_msg = api_resp.text[:150]
                     logger.warning(
                         f"[SubHD] /api/sub/down on {domain} returned HTTP {api_resp.status_code}: {err_msg}"
                     )
                     if "频率过高" in err_msg:
-                        cls = self.__class__
-                        cls.mark_rate_limited(600)
+                        had_403_or_ratelimit = True
+                        self.mark_rate_limited(600, reason="频率过高 on /api/sub/down")
                     continue
 
                 api_data = api_resp.json()
@@ -355,8 +408,8 @@ class SubhdProvider(BaseProvider):
                     rej_msg = str(api_data.get('msg', ''))
                     logger.warning(f"[SubHD] /api/sub/down on {domain} rejected: {rej_msg}")
                     if "频率过高" in rej_msg:
-                        cls = self.__class__
-                        cls.mark_rate_limited(600)
+                        had_403_or_ratelimit = True
+                        self.mark_rate_limited(600, reason="频率过高 in JSON response")
                     continue
 
                 file_url = api_data.get("url")
@@ -368,12 +421,27 @@ class SubhdProvider(BaseProvider):
                 if file_resp.status_code == 200:
                     filename = self.extract_filename_from_response(file_resp, default=f"subhd_{sid}.zip")
                     return file_resp.content, filename
+                elif file_resp.status_code == 403:
+                    logger.warning(f"[SubHD] File download from {file_url} returned HTTP 403 Forbidden")
+                    had_403_or_ratelimit = True
+                    self.mark_rate_limited(600, reason="HTTP 403 on file download")
                 else:
                     logger.warning(f"[SubHD] File download from {file_url} failed with HTTP {file_resp.status_code}")
 
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"[SubHD] Download network error on mirror {domain} for {sid} ({type(e).__name__}): {e}")
+                if domain != self.base_url:
+                    self.mark_domain_unhealthy(domain, cooldown_secs=600)
+                continue
             except Exception as e:
                 logger.warning(f"[SubHD] Download error on mirror {domain} for {sid}: {e}")
                 continue
 
         logger.error(f"[SubHD] All mirror endpoints failed downloading sid '{sid}'")
+        cls = self.__class__
+        if had_403_or_ratelimit:
+            cls.mark_rate_limited(600, reason="All mirror endpoints failed with 403 / rate limit")
+        elif not cls.is_rate_limited():
+            cls.mark_rate_limited(300, reason="All mirror endpoints failed downloading")
+
         return None, ""
