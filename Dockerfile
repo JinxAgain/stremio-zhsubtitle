@@ -1,8 +1,10 @@
 FROM python:3.11-slim
 
-# Install system utilities (p7zip and unar for full RAR/7z/ZIP archive extraction)
+# Install system utilities (curl, unar, and official 7-Zip 7zz with native RAR5 support)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends p7zip-full unar && \
+    apt-get install -y --no-install-recommends curl ca-certificates xz-utils unar && \
+    curl -fsSL https://www.7-zip.org/a/7z2301-linux-x64.tar.xz | tar -xJf - -C /usr/local/bin 7zz 7zzs && \
+    chmod +x /usr/local/bin/7zz /usr/local/bin/7zzs && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

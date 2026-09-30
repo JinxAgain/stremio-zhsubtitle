@@ -4,10 +4,13 @@ import gzip
 import io
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
+import urllib.request
 import zipfile
 from typing import Dict, List, Optional, Tuple
 
@@ -21,9 +24,71 @@ BILINGUAL_REGEX = re.compile(
     r'(?:chs|cht|zh|chi|zho|简|繁|简体|繁体)[&+._ /-]*(?:eng?|english|英文|英语)|'
     r'(?:eng?|english|英文|英语)[&+._ /-]*(?:chs|cht|zh|chi|zho|简|繁|简体|繁体)|'
     r'\[(?:chs|cht|zh|简|繁|简体|繁体)[^\]]*\].*?\[(?:eng?|english|英文|英语)[^\]]*\]|'
-    r'\[(?:eng?|english|英文|英语)[^\]]*\].*?\[(?:chs|cht|zh|简|繁|简体|繁体)[^\]]*\])',
+    r'\[(?:eng?|english|英语)[^\]]*\].*?\[(?:chs|cht|zh|简|繁|简体|繁体)[^\]]*\])',
     re.IGNORECASE
 )
+
+
+def bootstrap_linux_7zz() -> Optional[str]:
+    """Auto-bootstrap official standalone static 7zzs for Linux x86_64 to data/bin/7zz."""
+    if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
+        return None
+
+    target_dir = os.path.join("data", "bin")
+    target_bin = os.path.join(target_dir, "7zz")
+    if os.path.isfile(target_bin) and os.access(target_bin, os.X_OK):
+        return target_bin
+
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        url = "https://www.7-zip.org/a/7z2301-linux-x64.tar.xz"
+        logger.info(f"[Extractor] Downloading official static 7zz from {url} for RAR5 support...")
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:xz") as tf:
+            member = tf.getmember("7zzs")
+            extracted = tf.extractfile(member)
+            if extracted:
+                with open(target_bin, "wb") as out_f:
+                    out_f.write(extracted.read())
+                os.chmod(target_bin, 0o755)
+                logger.info(f"[Extractor] Successfully installed official static 7zz to '{target_bin}'")
+                return target_bin
+    except Exception as e:
+        logger.warning(f"[Extractor] Failed to bootstrap static 7zz on Linux: {e}")
+
+    return None
+
+
+def get_7z_binary() -> Optional[str]:
+    """Find the best available 7z binary, prioritizing official 7zz with full RAR5 support."""
+    # 1. Prefer official 7zz/7zzs command in PATH
+    exe = shutil.which("7zz") or shutil.which("7zzs")
+    if exe:
+        return exe
+
+    # 2. Check candidate paths for official 7zz
+    candidates = (
+        "/usr/local/bin/7zz",
+        "/usr/local/bin/7zzs",
+        "/usr/bin/7zz",
+        os.path.join("data", "bin", "7zz"),
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe"
+    )
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+
+    # 3. Fallback to generic 7z / 7za (e.g. Debian p7zip)
+    exe = shutil.which("7z") or shutil.which("7za")
+    if exe:
+        return exe
+    if os.path.isfile("/usr/bin/7z"):
+        return "/usr/bin/7z"
+
+    return None
 
 
 def fix_archive_filename(raw_name: str) -> str:
@@ -188,62 +253,39 @@ class SubtitleExtractor:
 
             unpacked = False
 
-            # 1. Try unar CLI (supports all RAR / RAR5 / 7Z / ZIP formats on Linux without non-free dependencies)
-            exe_unar = shutil.which("unar") or (
-                candidate if os.path.isfile(candidate := os.path.join("data", "bin", "unar")) else None
-            )
-            if exe_unar:
+            # 1. Try 7-Zip CLI (prefer official 7zz with native RAR5 support)
+            exe_7z = get_7z_binary()
+            if exe_7z:
                 try:
                     res = subprocess.run(
-                        [exe_unar, "-o", extract_dest, "-D", "-f", archive_path],
+                        [exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
                         capture_output=True,
                         timeout=30
                     )
                     if res.returncode == 0:
                         unpacked = True
                     else:
+                        out_msg = (res.stderr or res.stdout).decode("utf-8", errors="ignore").strip()
                         logger.warning(
-                            f"[Extractor] unar failed with code {res.returncode}: "
-                            f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
+                            f"[Extractor] 7-Zip ({exe_7z}) failed with code {res.returncode}: {out_msg[:300]}"
                         )
+                        # If p7zip lacks RAR5 algorithm ("Unsupported Method"), fallback to official static 7zz
+                        if "Unsupported Method" in out_msg and exe_7z != os.path.join("data", "bin", "7zz"):
+                            static_7zz = bootstrap_linux_7zz()
+                            if static_7zz:
+                                res2 = subprocess.run(
+                                    [static_7zz, "x", "-y", f"-o{extract_dest}", archive_path],
+                                    capture_output=True,
+                                    timeout=30
+                                )
+                                if res2.returncode == 0:
+                                    unpacked = True
+                                else:
+                                    logger.warning(f"[Extractor] Bootstrapped static 7zz failed with code {res2.returncode}")
                 except Exception as e:
-                    logger.warning(f"[Extractor] unar extraction failed: {e}")
+                    logger.warning(f"[Extractor] 7-Zip extraction failed: {e}")
 
-            # 2. Try 7-Zip CLI (7zz on modern Linux, 7z/7za, or Windows standard locations)
-            exe_7z = None
-            if not unpacked:
-                exe_7z = shutil.which("7zz") or shutil.which("7z") or shutil.which("7za")
-                if not exe_7z:
-                    candidates = (
-                        "/usr/bin/7zz",
-                        "/usr/local/bin/7zz",
-                        "/usr/bin/7z",
-                        os.path.join("data", "bin", "7zz"),
-                        r"C:\Program Files\7-Zip\7z.exe",
-                        r"C:\Program Files (x86)\7-Zip\7z.exe"
-                    )
-                    for candidate in candidates:
-                        if os.path.isfile(candidate):
-                            exe_7z = candidate
-                            break
-                if exe_7z:
-                    try:
-                        res = subprocess.run(
-                            [exe_7z, "x", "-y", f"-o{extract_dest}", archive_path],
-                            capture_output=True,
-                            timeout=30
-                        )
-                        if res.returncode == 0:
-                            unpacked = True
-                        else:
-                            logger.warning(
-                                f"[Extractor] 7-Zip failed with code {res.returncode}: "
-                                f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
-                            )
-                    except Exception as e:
-                        logger.warning(f"[Extractor] 7-Zip extraction failed: {e}")
-
-            # 3. Try native unrar CLI for RAR files if available
+            # 2. Try native unrar CLI for RAR files if available
             if not unpacked and original_filename.lower().endswith(".rar"):
                 exe_unrar = shutil.which("unrar") or (
                     candidate if os.path.isfile(candidate := os.path.join("data", "bin", "unrar")) else None
@@ -258,12 +300,51 @@ class SubtitleExtractor:
                         if res.returncode == 0:
                             unpacked = True
                         else:
+                            out_msg = (res.stderr or res.stdout).decode("utf-8", errors="ignore").strip()
                             logger.warning(
-                                f"[Extractor] unrar failed with code {res.returncode}: "
-                                f"{res.stderr.decode('utf-8', errors='ignore')[:300]}"
+                                f"[Extractor] unrar failed with code {res.returncode}: {out_msg[:300]}"
                             )
                     except Exception as e:
                         logger.warning(f"[Extractor] unrar extraction failed: {e}")
+
+            # 3. Try unar CLI
+            if not unpacked:
+                exe_unar = shutil.which("unar") or (
+                    candidate if os.path.isfile(candidate := os.path.join("data", "bin", "unar")) else None
+                )
+                if exe_unar:
+                    try:
+                        res = subprocess.run(
+                            [exe_unar, "-o", extract_dest, "-D", "-f", archive_path],
+                            capture_output=True,
+                            timeout=30
+                        )
+                        if res.returncode == 0:
+                            unpacked = True
+                        else:
+                            out_msg = (res.stderr or res.stdout).decode("utf-8", errors="ignore").strip()
+                            logger.warning(
+                                f"[Extractor] unar failed with code {res.returncode}: {out_msg[:300]}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[Extractor] unar extraction failed: {e}")
+
+            # 4. If RAR archive still not unpacked on Linux x86_64, try bootstrapping static 7zz as fallback
+            if not unpacked and original_filename.lower().endswith(".rar"):
+                static_7zz = bootstrap_linux_7zz()
+                if static_7zz:
+                    try:
+                        res = subprocess.run(
+                            [static_7zz, "x", "-y", f"-o{extract_dest}", archive_path],
+                            capture_output=True,
+                            timeout=30
+                        )
+                        if res.returncode == 0:
+                            unpacked = True
+                        else:
+                            logger.warning(f"[Extractor] Fallback static 7zz failed with code {res.returncode}")
+                    except Exception as e:
+                        logger.warning(f"[Extractor] Fallback static 7zz extraction error: {e}")
 
             # 4. Try py7zr
             if not unpacked and original_filename.lower().endswith(".7z"):
