@@ -60,8 +60,17 @@ class SubtitleScorer:
             except Exception:
                 pass
 
-        # 2. IMDb exact match bonus
-        if candidate.tags.imdb_matched:
+        # 2. Season conflict check for TV series
+        has_season_conflict = False
+        cand_seasons = set()
+        if query.is_tv and query.season is not None:
+            from ..providers.base import extract_seasons_from_text
+            cand_seasons = extract_seasons_from_text(candidate.title)
+            if cand_seasons and query.season not in cand_seasons:
+                has_season_conflict = True
+
+        # IMDb exact match bonus (suppressed if TV series has conflicting season)
+        if candidate.tags.imdb_matched and not has_season_conflict:
             score += 1000.0
 
         # 3. Release year verification
@@ -74,10 +83,16 @@ class SubtitleScorer:
                 elif not candidate.tags.imdb_matched:
                     score -= 1500.0
 
-        # 3. Episode matching for TV series
+        # 4. Episode matching for TV series
         if query.is_tv and query.episode is not None:
             ep = query.episode
             s = query.season
+
+            if has_season_conflict:
+                # Heavy penalty if candidate title explicitly indicates a different season!
+                score -= 5000.0
+            elif cand_seasons and s in cand_seasons:
+                score += 400.0  # Explicit season match bonus
 
             # Extract all explicit episode numbers from candidate title
             eps = []
@@ -98,7 +113,7 @@ class SubtitleScorer:
                     rf"season\s*0*{s}\b",
                     rf"第\s*0*{s}\s*季"
                 ]
-                season_matches = any(re.search(pat, title_lower) for pat in season_pats)
+                season_matches = any(re.search(pat, title_lower) for pat in season_pats) or (s in cand_seasons)
 
             # Check if mentions a conflicting other episode
             has_conflicting_ep = False
@@ -121,7 +136,7 @@ class SubtitleScorer:
             if is_season_pack and (season_matches or s is None):
                 # Season pack / collection covering all episodes (prioritized as requested)
                 score += 1150.0
-            elif matched_ep:
+            elif matched_ep and not has_season_conflict:
                 # Direct episode match
                 score += 1000.0
             elif has_conflicting_ep:

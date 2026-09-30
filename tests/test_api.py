@@ -316,5 +316,111 @@ def test_imdb_priority_and_year_mismatch_penalty():
     assert c_wrong_year.score < 0
 
 
+def test_tv_season_mismatch_rejection():
+    """Verify is_episode_match strictly rejects candidates from different seasons."""
+    from app.providers.base import is_episode_match
+
+    # Ted Lasso S04E09 vs S01E09 (exact user case)
+    match, is_pack = is_episode_match(
+        "[zmk.pw]足球教练 第1季第9集（Ted.Lasso S01E09）.zip",
+        season=4,
+        episode=9
+    )
+    assert match is False
+    assert is_pack is False
+
+    # Ted Lasso S04E09 vs S04E09
+    match, is_pack = is_episode_match(
+        "Ted.Lasso.S04E09.1080p.WEB-DL.srt",
+        season=4,
+        episode=9
+    )
+    assert match is True
+    assert is_pack is False
+
+    # Season 4 Pack
+    match, is_pack = is_episode_match(
+        "Ted Lasso 第四季全集",
+        season=4,
+        episode=9
+    )
+    assert match is True
+    assert is_pack is True
+
+    # Season 1 Pack when query is Season 4 -> Rejected
+    match, is_pack = is_episode_match(
+        "Ted Lasso 第一季全集",
+        season=4,
+        episode=9
+    )
+    assert match is False
+    assert is_pack is False
+
+
+def test_zimuku_series_season_gt_1_skips_imdb_id():
+    """Verify Zimuku does NOT search IMDb ID when TV series season > 1."""
+    from app.providers.zimuku import ZimukuProvider
+    from app.providers.base import VideoQueryMeta
+
+    zimuku = ZimukuProvider()
+    meta_s4 = VideoQueryMeta(
+        imdb_id="tt10986410",
+        media_type="series",
+        season=4,
+        episode=9,
+        title="Ted Lasso"
+    )
+    queries = zimuku._build_queries(meta_s4)
+
+    # Must be ONLY "Ted Lasso 第四季" (no S04, no tt10986410)
+    assert queries == ["Ted Lasso 第四季"]
+
+    # Season 1 CAN use IMDb ID
+    meta_s1 = VideoQueryMeta(
+        imdb_id="tt10986410",
+        media_type="series",
+        season=1,
+        episode=1,
+        title="Ted Lasso"
+    )
+    queries_s1 = zimuku._build_queries(meta_s1)
+    assert "tt10986410" in queries_s1
+
+
+def test_scorer_penalizes_season_mismatch():
+    """Verify SubtitleScorer heavily penalizes candidates with conflicting seasons."""
+    from app.providers.base import VideoQueryMeta, SubtitleCandidate, SubtitleTags
+    from app.core.scorer import SubtitleScorer
+
+    meta = VideoQueryMeta(
+        imdb_id="tt10986410",
+        media_type="series",
+        season=4,
+        episode=9,
+        title="Ted Lasso"
+    )
+
+    c_s1 = SubtitleCandidate(
+        id="c_s1",
+        provider="zimuku",
+        title="[zmk.pw]足球教练 第1季第9集（Ted.Lasso S01E09）.zip",
+        page_url="",
+        tags=SubtitleTags(imdb_matched=True, bilingual=True)
+    )
+
+    c_s4 = SubtitleCandidate(
+        id="c_s4",
+        provider="subhd",
+        title="Ted.Lasso.S04E09.1080p.WEB-DL.[Bilingual.SubHD].srt",
+        page_url="",
+        tags=SubtitleTags(imdb_matched=False, bilingual=True)
+    )
+
+    ranked = SubtitleScorer.rank_candidates([c_s1, c_s4], meta)
+    assert ranked[0].id == "c_s4"
+    assert c_s1.score < 0
+
+
+
 
 

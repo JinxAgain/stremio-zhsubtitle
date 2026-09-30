@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stremio 中文字幕插件 (stremio-zhsubtitle) 全流程架构与运行流</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --surface: #111827;
+      --surface-border: #1f293d;
+      --card-bg: #1e293b;
+      --card-hover: #273549;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-glow: rgba(56, 189, 248, 0.15);
+      --success: #34d399;
+      --warning: #fbbf24;
+      --danger: #f87171;
+      --purple: #a78bfa;
+      --pink: #f472b6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
+      padding: 32px 20px;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--surface-border);
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+      margin-top: 8px;
+    }
+
+    .legend-bar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 16px;
+      margin-top: 20px;
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    /* Process Flow Container */
+    .flow-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+      position: relative;
+    }
+
+    /* Section Card */
+    .phase-card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      position: relative;
+      transition: border-color 0.2s ease;
+    }
+
+    .phase-card:hover {
+      border-color: #334155;
+    }
+
+    .phase-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 12px;
+    }
+
+    .phase-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .phase-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .step-box {
+      background: var(--card-bg);
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 16px;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
+    .step-box:hover {
+      background: var(--card-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.3);
+    }
+
+    .step-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .step-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .tag {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .tag-blue { background: rgba(56, 189, 248, 0.15); color: var(--primary); }
+    .tag-green { background: rgba(52, 211, 153, 0.15); color: var(--success); }
+    .tag-yellow { background: rgba(251, 191, 36, 0.15); color: var(--warning); }
+    .tag-purple { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+    .tag-pink { background: rgba(244, 114, 182, 0.15); color: var(--pink); }
+
+    .step-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .step-list {
+      margin-top: 8px;
+      padding-left: 18px;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+
+    .step-list li {
+      margin-bottom: 4px;
+    }
+
+    .code-pill {
+      display: inline-block;
+      background: #0f172a;
+      border: 1px solid #334155;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #38bdf8;
+    }
+
+    .highlight-box {
+      border-left: 3px solid var(--primary);
+      background: rgba(56, 189, 248, 0.05);
+      padding: 10px 12px;
+      border-radius: 0 8px 8px 0;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .warning-box {
+      border-left: 3px solid var(--warning);
+      background: rgba(251, 191, 36, 0.06);
+      padding: 10px 12px;
+      border-radius: 0 8px 8px 0;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    /* Connector Arrow */
+    .flow-connector {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      margin: -10px 0;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .arrow-icon {
+      width: 20px;
+      height: 20px;
+      stroke: var(--primary);
+      stroke-width: 2;
+      fill: none;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 50px;
+      padding-top: 20px;
+      border-top: 1px solid var(--surface-border);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>
+      <span>🎬</span>
+      Stremio 中文字幕插件 (stremio-zhsubtitle) 全流程架构与运行流
+    </h1>
+    <p class="subtitle">面向 Stremio / Harbor 客户端的 Zimuku 与 SubHD 双源聚合、WAF 自动绕过与按需清洗架构</p>
+    
+    <div class="legend-bar">
+      <div class="legend-item"><span class="dot" style="background: var(--primary)"></span> 客户端与网关交互</div>
+      <div class="legend-item"><span class="dot" style="background: var(--purple)"></span> 上游并发爬虫 (SubHD & Zimuku)</div>
+      <div class="legend-item"><span class="dot" style="background: var(--warning)"></span> 季数隔离与智能打分</div>
+      <div class="legend-item"><span class="dot" style="background: var(--success)"></span> 按需解压、清洗与持久化缓存</div>
+    </div>
+  </header>
+
+  <div class="flow-wrapper">
+
+    <!-- PHASE 1: CLIENT TRIGGER & GATEWAY -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">
+          <span class="phase-badge" style="background: rgba(56,189,248,0.2); color: var(--primary);">1</span>
+          客户端触发与网关入口 (Client & Gateway Routing)
+        </div>
+        <span class="tag tag-blue">FastAPI Routers</span>
+      </div>
+
+      <div class="grid-3">
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">Stremio 播放器发起检索</span>
+            <span class="tag tag-blue">Query</span>
+          </div>
+          <p class="step-desc">用户在 Stremio 或 Harbor 播放影片时，播放器根据配置向插件发送字幕查询请求。</p>
+          <ul class="step-list">
+            <li>路由: <span class="code-pill">GET /subtitles/{type}/{id}.json</span></li>
+            <li>携带参数: 片名、年份、季号 S、集号 E、视频文件名 <span class="code-pill">filename=...</span></li>
+          </ul>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">用户个性化配置解码</span>
+            <span class="tag tag-purple">Config</span>
+          </div>
+          <p class="step-desc">解析路径前缀中的 Base64 用户配置，支持零配置默认值。</p>
+          <ul class="step-list">
+            <li>语言偏好: <span class="code-pill">bilingual</span> (双语优先) / <span class="code-pill">chs</span> / <span class="code-pill">cht</span></li>
+            <li>源偏好: <span class="code-pill">all</span> (双源聚合) / <span class="code-pill">subhd</span> / <span class="code-pill">zimuku</span></li>
+            <li>返回上限: 默认 8 条精选字幕</li>
+          </ul>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">检索结果缓存快查 (Cache L1)</span>
+            <span class="tag tag-green">&lt;5ms HIT</span>
+          </div>
+          <p class="step-desc">检查内存与磁盘的检索缓存，命中则直接返回，避免重复抓取上游。</p>
+          <div class="highlight-box">
+            <b>并发防击穿:</b> 每个唯一 CacheKey 绑定专用异步锁 <code>asyncio.Lock</code>，同一影片多请求并发时仅抓取一次。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECTOR -->
+    <div class="flow-connector">
+      <span>CACHE MISS ➔ 触发元数据补全与上游抓取</span>
+      <svg class="arrow-icon" viewBox="0 0 24 24"><path d="M12 5v14m7-7l-7 7-7-7"/></svg>
+    </div>
+
+    <!-- PHASE 2: METADATA ENRICHMENT -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">
+          <span class="phase-badge" style="background: rgba(167,139,250,0.2); color: var(--purple);">2</span>
+          元数据补全与标准化 (Cinemeta & TMDB Resolution)
+        </div>
+        <span class="tag tag-purple">Metadata Resolver</span>
+      </div>
+
+      <div class="grid-2">
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">媒体 ID 归一化与标题解析</span>
+            <span class="tag tag-purple">CinemetaClient</span>
+          </div>
+          <p class="step-desc">不同播放器传入的 ID 可能是 IMDb ID (<code>tt...</code>) 或 TMDB ID (<code>tmdb:...</code>)。</p>
+          <ul class="step-list">
+            <li><b>tt 编号:</b> 调用 Cinemeta 官方 API 获取标准英文名与发行年份。</li>
+            <li><b>tmdb 编号:</b> 解析 TMDB ID 并转换为 IMDb 编号与主标题。</li>
+            <li><b>文件名兜底:</b> 若无 API 结果，从播放器 <code>filename</code> 正则提取片名与年份。</li>
+          </ul>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">查询目标标准化 (VideoQueryMeta)</span>
+            <span class="tag tag-blue">Standard Object</span>
+          </div>
+          <p class="step-desc">构建统一的不可变检索元数据对象，供后续爬虫与评分引擎共享：</p>
+          <div class="highlight-box">
+            <code>imdb_id: 'tt10986410'</code><br>
+            <code>title: 'Ted Lasso'</code><br>
+            <code>season: 4, episode: 9, is_tv: true</code><br>
+            <code>filename: 'Ted.Lasso.S04E09.1080p.WEB-DL.mkv'</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECTOR -->
+    <div class="flow-connector">
+      <span>并发派发爬虫任务 ➔ asyncio.gather(subhd, zimuku)</span>
+      <svg class="arrow-icon" viewBox="0 0 24 24"><path d="M12 5v14m7-7l-7 7-7-7"/></svg>
+    </div>
+
+    <!-- PHASE 3: PARALLEL SCRAPERS -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">
+          <span class="phase-badge" style="background: rgba(251,191,36,0.2); color: var(--warning);">3</span>
+          双源并发检索与反爬安全绕过 (Parallel Scrapers)
+        </div>
+        <span class="tag tag-yellow">Zero-Block Engine</span>
+      </div>
+
+      <div class="grid-2">
+        <!-- SubHD Engine -->
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">SubHD 爬虫引擎 (subhd.tv)</span>
+            <span class="tag tag-blue">SubhdProvider</span>
+          </div>
+          <ul class="step-list">
+            <li><b>限流熔断保护:</b> 探测到 403 或验证码时自动开启 15 分钟冷却期，避免无效等待。</li>
+            <li><b>复合查询构建:</b> SubHD 支持 IMDb + 季集组合搜索：
+              <div class="code-pill">tt10986410 S04E09</div> ➔ <div class="code-pill">tt10986410 S04</div> ➔ <div class="code-pill">片名 S04E09</div>
+            </li>
+            <li><b>卡片深度解析:</b> 提取字幕格式 (SRT/ASS)、翻译品质（官译/精修）、双语标签、下载量与评分。</li>
+          </ul>
+        </div>
+
+        <!-- Zimuku Engine -->
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">Zimuku 爬虫引擎 (srtku.com / zmk.pw)</span>
+            <span class="tag tag-purple">ZimukuProvider</span>
+          </div>
+          <ul class="step-list">
+            <li><b>云锁 WAF & BMP 验证码秒解:</b>
+              内置 <code>ZimukuBmpSolver</code>，通过 100x27 BMP 9点像素采样模板比对，&lt;5ms 自动完成验证码识别。
+            </li>
+            <li><b style="color: var(--warning);">关键季数隔离规则:</b>
+              Zimuku 不支持 <code>IMDb+季</code> 或 <code>S04</code> 类英文简写搜索，搜纯 IMDb 会直达第 1 季；<b>当 season &gt; 1 时，唯一有效搜索关键词必须为中文季名</b>：
+              <div class="code-pill">Ted Lasso 第四季</div>
+            </li>
+            <li><b>镜像自动容灾:</b> <code>srtku.com</code> 异常时毫秒级切换备用镜像 <code>zmk.pw</code> / <code>zimuku.org</code>。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONNECTOR -->
+    <div class="flow-connector">
+      <span>候选字幕汇总 ➔ 严格季数过滤与智能排序</span>
+      <svg class="arrow-icon" viewBox="0 0 24 24"><path d="M12 5v14m7-7l-7 7-7-7"/></svg>
+    </div>
+
+    <!-- PHASE 4: FILTERING & SCORING -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">
+          <span class="phase-badge" style="background: rgba(244,114,182,0.2); color: var(--pink);">4</span>
+          严格季数校验与智能评分引擎 (Scoring & Filtering)
+        </div>
+        <span class="tag tag-pink">SubtitleScorer</span>
+      </div>
+
+      <div class="grid-2">
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">严格季数校验 (is_episode_match)</span>
+            <span class="tag tag-yellow">Hard Filter</span>
+          </div>
+          <p class="step-desc">从源头杜绝跨季误匹配（例如查询 S04E09 误选 S01E09）：</p>
+          <ul class="step-list">
+            <li><b>季数冲突硬拒绝:</b> 标题显式包含 <code>S01</code> 或 <code>第一季</code> 时，直接判定为 <code>False</code> 丢弃。</li>
+            <li><b>单集精确匹配:</b> 必须命中 <code>S04E09</code> 或目标集数，拒绝错误集数。</li>
+            <li><b>全季包智能识别:</b> 包含 <code>全集</code>、<code>Complete</code>、<code>整季</code> 时判定为季包候选。</li>
+          </ul>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">多维度权重加权评分</span>
+            <span class="tag tag-green">Smart Ranking</span>
+          </div>
+          <ul class="step-list">
+            <li><b>剧集匹配:</b> 整季包 (+1150) / 单集精确匹配 (+1000) / 季数冲突 (-5000 淘汰)</li>
+            <li><b>语言偏好:</b> 双语字幕 (+600) / 简体中文 (+350) / 纯英文 (-2000 淘汰)</li>
+            <li><b>版本对齐:</b> 与播放器 filename 中的分辨率 (1080p/4K)、压制组 (NTb/PSA) 一致 (+180)</li>
+            <li><b>品质加分:</b> 官方译本/精修 (+100) / 高下载与五星好评 (+50)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="highlight-box" style="margin-top: 16px;">
+        <b>格式化输出 (OpenSubtitles v3 标准):</b><br>
+        • UI 标签: <code>Ted Lasso · S04E09 · WEB-DL · 1080p · [Bilingual SubHD]</code><br>
+        • 安全流式下载 URL: <code>/subtitles/dl/subhd/Yj2dBE/9/Ted.Lasso.S04E09.1080p.x265.Bilingual.SubHD.srt</code>
+      </div>
+    </div>
+
+    <!-- CONNECTOR -->
+    <div class="flow-connector">
+      <span>返回字幕清单给 Stremio ➔ 用户点击字幕播放</span>
+      <svg class="arrow-icon" viewBox="0 0 24 24"><path d="M12 5v14m7-7l-7 7-7-7"/></svg>
+    </div>
+
+    <!-- PHASE 5: ON-DEMAND DOWNLOAD & EXTRACTION -->
+    <div class="phase-card">
+      <div class="phase-header">
+        <div class="phase-title">
+          <span class="phase-badge" style="background: rgba(52,211,153,0.2); color: var(--success);">5</span>
+          按需解压、字符清洗与直推流 (On-Demand Extraction Pipeline)
+        </div>
+        <span class="tag tag-green">Zero-Garbled Streamer</span>
+      </div>
+
+      <div class="grid-3">
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">磁盘字幕缓存速验 (Cache L2)</span>
+            <span class="tag tag-green">&lt;2ms HIT</span>
+          </div>
+          <p class="step-desc">检查 <code>data/cache/{provider}_{id}_{ep}.srt</code>：</p>
+          <div class="highlight-box">
+            若已存在，直接返回规范化 UTF-8 SRT 内容，耗时仅 2ms，上游零请求！
+          </div>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">压缩包拉取与内存流展开</span>
+            <span class="tag tag-blue">SubtitleExtractor</span>
+          </div>
+          <ul class="step-list">
+            <li><b>SubHD:</b> 模拟前端 AJAX 抓取动态下载 Token，跟随 302 重定向下载原始压缩包。</li>
+            <li><b>内存极速解压:</b> ZIP 格式采用纯内存流解压，避免磁盘 I/O 开销；支持 7z/RAR 多层嵌套展开。</li>
+            <li><b>智能文件选优:</b> 从包内多个文件中智能选出目标集数且为双语/简中的最佳 <code>.srt/.ass</code> 文件。</li>
+          </ul>
+        </div>
+
+        <div class="step-box">
+          <div class="step-head">
+            <span class="step-name">字幕深度清洗 (SubtitleCleaner)</span>
+            <span class="tag tag-purple">RFC UTF-8 SRT</span>
+          </div>
+          <ul class="step-list">
+            <li><b>编码自动探测与修正:</b> 自动侦测 GB18030、GBK、BIG5、UTF-16 并统一转为标准 UTF-8，彻底告别乱码。</li>
+            <li><b>ASS/SSA 绘图与特效剥离:</b> 剔除 <code>{\pos}</code>、<code>{\move}</code>、卡拉OK 等电视播放器无法解析的乱码标记。</li>
+            <li><b>规范化 SRT 流直推:</b> 设置 <code>Content-Type: text/plain; charset=utf-8</code>，防 IDM 劫持。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <p>stremio-zhsubtitle · Chinese Subtitles Aggregator for Stremio & Harbor</p>
+    <p style="margin-top: 4px; font-size: 11px;">Generated for clean architecture & visual documentation</p>
+  </div>
+</div>
+
+</body>
+</html>

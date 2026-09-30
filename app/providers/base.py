@@ -18,6 +18,13 @@ CN_NUM_MAP = {
     16: "十六", 17: "十七", 18: "十八", 19: "十九", 20: "二十"
 }
 
+CN_SEASON_REV = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+    "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15,
+    "十六": 16, "十七": 17, "十八": 18, "十九": 19, "二十": 20,
+}
+
 
 def to_cn_season(season: Optional[int]) -> str:
     """Convert integer season number to Chinese text representation (e.g. 2 -> '第二季')."""
@@ -25,6 +32,45 @@ def to_cn_season(season: Optional[int]) -> str:
         return ""
     cn_num = CN_NUM_MAP.get(season, str(season))
     return f"第{cn_num}季"
+
+
+def extract_seasons_from_text(text: str) -> set[int]:
+    """Extract all explicit season numbers referenced in a title string."""
+    seasons = set()
+    if not text:
+        return seasons
+
+    # S01, S1, S04
+    for m in re.finditer(r"\b[sS](\d{1,2})(?:[^\d]|$)", text):
+        seasons.add(int(m.group(1)))
+
+    # Season 1, Season 04
+    for m in re.finditer(r"\bseason\s*(\d{1,2})\b", text, flags=re.IGNORECASE):
+        seasons.add(int(m.group(1)))
+
+    # 第1季, 第04季
+    for m in re.finditer(r"第\s*(\d{1,2})\s*季", text):
+        seasons.add(int(m.group(1)))
+
+    # 第一季, 第四季, etc.
+    for m in re.finditer(r"第\s*([一二三四五六七八九十]+)\s*季", text):
+        val = CN_SEASON_REV.get(m.group(1))
+        if val:
+            seasons.add(val)
+
+    # Season ranges: S01-S03, S1-S4
+    for m in re.finditer(r"\b[sS](\d{1,2})\s*[-~至到]\s*[sS]?(\d{1,2})\b", text):
+        s_start, s_end = int(m.group(1)), int(m.group(2))
+        if 0 < s_start <= s_end <= 30:
+            seasons.update(range(s_start, s_end + 1))
+
+    # Chinese season ranges: 第1-3季, 第一季至第三季
+    for m in re.finditer(r"第\s*(\d{1,2})\s*[-~至到]\s*(\d{1,2})\s*季", text):
+        s_start, s_end = int(m.group(1)), int(m.group(2))
+        if 0 < s_start <= s_end <= 30:
+            seasons.update(range(s_start, s_end + 1))
+
+    return seasons
 
 
 def is_episode_match(title: str, season: Optional[int], episode: Optional[int]) -> Tuple[bool, bool]:
@@ -37,39 +83,58 @@ def is_episode_match(title: str, season: Optional[int], episode: Optional[int]) 
 
     title_lower = title.lower()
 
-    # 1. Exact episode match (e.g. S01E14, E14, EP14, 第14集, [14])
+    # Step 1: Strict Season Conflict Check
+    if season is not None:
+        found_seasons = extract_seasons_from_text(title)
+        if found_seasons and season not in found_seasons:
+            # Title explicitly belongs to a different season (e.g. S01 when looking for S04)
+            return False, False
+
+    # Step 2: Target Episode Match
     if episode is not None:
         ep_patterns = [
             rf"\b[eE][pP]?0*{episode}\b",
-            rf"s\d{{1,2}}e0*{episode}\b",
             rf"第\s*0*{episode}\s*[集话話]",
-            rf"\[0*{episode}\]"
+            rf"\[0*{episode}\]",
+            rf"(?:^|[._ -])0*{episode}(?:[._ -]|\.srt|\.ass|\.ssa|\.vtt)"
         ]
-        if any(re.search(pat, title_lower) for pat in ep_patterns):
-            return True, False
+        if season is not None:
+            ep_patterns.insert(0, rf"[sS]0*{season}[eE]0*{episode}\b")
 
-    # 2. Season pack / collection match
-    pack_regex = re.compile(r"全|合集|pack|complete|\b\d+-\d+\b|全部|整季|季全", re.IGNORECASE)
+        matched_ep = any(re.search(pat, title, flags=re.IGNORECASE) for pat in ep_patterns)
+
+        # Check if title explicitly specifies a different single episode (and not target episode)
+        has_different_ep = False
+        all_eps = [
+            int(num) for num in re.findall(r"\b[eE][pP]?(\d{1,3})\b", title_lower)
+        ]
+        if all_eps and episode not in all_eps:
+            has_different_ep = True
+        else:
+            cn_eps = [
+                int(num) for num in re.findall(r"第\s*(\d{1,3})\s*[集话話]", title_lower)
+            ]
+            if cn_eps and episode not in cn_eps:
+                has_different_ep = True
+
+        if matched_ep:
+            return True, False
+        if has_different_ep:
+            return False, False
+
+    # Step 3: Season pack / collection match
+    pack_regex = re.compile(r"全|合集|pack|complete|\b\d+-\d+\b|全部|整季|季全|全集", re.IGNORECASE)
     is_pack = bool(pack_regex.search(title_lower))
 
     if season is not None:
-        cn_s = to_cn_season(season).lower()
-        s_tokens = [f"s{season:02d}", f"s{season}", f"season {season}", cn_s, f"第{season}季"]
-
-        # Check if explicitly belongs to a different season
-        for s_idx in range(1, 20):
-            if s_idx != season:
-                cn_other = to_cn_season(s_idx).lower()
-                other_tokens = [f"s{s_idx:02d}", f"season {s_idx}", cn_other, f"第{s_idx}季"]
-                if any(tok in title_lower for tok in other_tokens):
-                    return False, False
-
-        matches_target_season = any(tok in title_lower for tok in s_tokens)
+        found_seasons = extract_seasons_from_text(title)
+        matches_target_season = (season in found_seasons) if found_seasons else False
         has_explicit_ep = bool(re.search(r"(?:[eE][pP]?|第\s*)\d+|(?:\b|\D)\d{1,2}\s*[集话話]", title_lower))
+
         if matches_target_season and (is_pack or not has_explicit_ep):
             return True, True
 
-    if is_pack:
+    if is_pack and season is None:
         return True, True
 
     return False, False

@@ -18,6 +18,7 @@ from .base import (
     to_cn_season,
     is_episode_match,
     extract_meta_from_filename,
+    extract_seasons_from_text,
 )
 from ..config import settings
 
@@ -297,16 +298,24 @@ class ZimukuProvider(BaseProvider):
 
         if meta.is_tv and meta.season:
             cn_s = to_cn_season(meta.season)
-            # 1. Primary: Exact IMDb ID
-            if is_tt_imdb:
-                queries.append(meta.imdb_id)
-            # 2. Fallbacks: Season title queries
-            if clean_title:
-                queries.append(f"{clean_title} {cn_s}")
-                queries.append(f"{clean_title} Season {meta.season}")
-                queries.append(clean_title)
+            if meta.season > 1:
+                # For Season > 1, Zimuku does NOT support 'IMDb + Season' or 'Title S04' search.
+                # Zimuku strictly indexes TV show work cards with Chinese season titles (e.g. 'Ted Lasso 第四季').
+                # Therefore, 'Title + 第X季' is the only valid search query.
+                if clean_title:
+                    queries.append(f"{clean_title} {cn_s}")
+            else:
+                # For Season 1, title + S01, title + 第一季, or exact IMDb ID
+                if clean_title:
+                    queries.append(f"{clean_title} S01")
+                    queries.append(f"{clean_title} 第一季")
+                if is_tt_imdb:
+                    queries.append(meta.imdb_id)
+                if clean_title:
+                    queries.append(f"{clean_title} Season 1")
+                    queries.append(clean_title)
         else:
-            # 1. Primary: Exact IMDb ID
+            # 1. Primary: Exact IMDb ID for movies
             if is_tt_imdb:
                 queries.append(meta.imdb_id)
             # 2. Fallbacks: Title & Year
@@ -319,9 +328,10 @@ class ZimukuProvider(BaseProvider):
         seen = set()
         deduped = []
         for q in queries:
-            if q and q not in seen:
-                seen.add(q)
-                deduped.append(q)
+            q_clean = q.strip()
+            if q_clean and q_clean not in seen:
+                seen.add(q_clean)
+                deduped.append(q_clean)
         return deduped
 
     def _parse_subtitles_from_search_table(
@@ -444,11 +454,15 @@ class ZimukuProvider(BaseProvider):
 
             # Check season match for TV series
             if meta.is_tv and meta.season:
-                cn_s = to_cn_season(meta.season)
-                s_tokens = [cn_s, f"第{meta.season}季", f"Season {meta.season}", f"S{meta.season:02d}"]
-                # If search returned multiple season entries, pick the right season
-                if not any(token.lower() in work_title.lower() for token in s_tokens) and len(work_divs) > 1:
+                work_seasons = extract_seasons_from_text(work_title)
+                # If work title explicitly belongs to a different season, reject immediately!
+                if work_seasons and meta.season not in work_seasons:
                     continue
+                cn_s = to_cn_season(meta.season)
+                s_tokens = [cn_s, f"第{meta.season}季", f"Season {meta.season}", f"S{meta.season:02d}", f"S{meta.season}"]
+                if not (work_seasons and meta.season in work_seasons):
+                    if not any(token.lower() in work_title.lower() for token in s_tokens) and len(work_divs) > 1:
+                        continue
 
             work_url = self._normalize_url(domain, work_href)
             work_resp = self._fetch_page(work_url)
