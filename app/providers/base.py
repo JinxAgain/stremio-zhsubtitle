@@ -65,7 +65,8 @@ def is_episode_match(title: str, season: Optional[int], episode: Optional[int]) 
                     return False, False
 
         matches_target_season = any(tok in title_lower for tok in s_tokens)
-        if matches_target_season and (is_pack or not re.search(r"\b[eE][pP]?\d+\b|第\s*\d+\s*[集话話]", title_lower)):
+        has_explicit_ep = bool(re.search(r"(?:[eE][pP]?|第\s*)\d+|(?:\b|\D)\d{1,2}\s*[集话話]", title_lower))
+        if matches_target_season and (is_pack or not has_explicit_ep):
             return True, True
 
     if is_pack:

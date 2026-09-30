@@ -43,12 +43,18 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
     On-demand endpoint to extract, normalize, cache, and stream clean UTF-8 SRT subtitles.
     """
     cache_filename = f"{provider}_{sub_id}_{episode_num}.srt"
-    out_filename = filename if filename.endswith(".srt") else f"{filename or cache_filename}.srt"
+    logger.info(
+        f"[Download] Incoming request: provider={provider}, id={sub_id}, ep={episode_num}, filename='{filename}'"
+    )
 
     # 1. Fast path: Return cached SRT from disk if present (<5ms)
     if cache_manager.has_subtitle(cache_filename):
         content = cache_manager.get_subtitle(cache_filename)
         if content:
+            cues_count = content.count(b"-->")
+            logger.info(
+                f"[Download] Cache HIT: '{cache_filename}' ({len(content)} bytes, {cues_count} cues). Serving cached SRT."
+            )
             return Response(
                 content=content,
                 media_type="text/plain; charset=utf-8",
@@ -59,6 +65,8 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
                     "Cache-Control": "public, max-age=86400",
                 }
             )
+
+    logger.info(f"[Download] Cache MISS: '{cache_filename}'. Fetching from upstream {provider}...")
 
     # 2. Slow path: Fetch archive from upstream provider
     archive_bytes: Optional[bytes] = None
@@ -81,14 +89,20 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
         )
         archive_bytes, raw_filename = await asyncio.to_thread(zimuku_provider.download, candidate)
     else:
+        logger.error(f"[Download] Unknown provider requested: {provider}")
         raise HTTPException(status_code=400, detail=f"Unknown subtitle provider: {provider}")
 
     if not archive_bytes:
-        logger.warning(f"[Download] Failed to download {sub_id} from {provider} (file: {filename})")
+        logger.warning(f"[Download] Failed to download {sub_id} from {provider} (requested filename: '{filename}')")
         raise HTTPException(status_code=404, detail="Upstream subtitle download failed")
 
-    # 3. Unpack archive and extract matching episode file
     target_ep = episode_num if episode_num > 0 else None
+    logger.info(
+        f"[Download] Successfully fetched '{raw_filename}' from {provider} ({len(archive_bytes)} bytes). "
+        f"Extracting target episode {target_ep}..."
+    )
+
+    # 3. Unpack archive and extract matching episode file
     sub_bytes, sub_name = SubtitleExtractor.extract_best_subtitle(
         archive_bytes,
         raw_filename,
@@ -103,24 +117,37 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
             or archive_bytes[:4] in (b"Rar!", b"PK\x03\x04", b"7z\xbc\xaf")
         )
         if is_archive:
-            logger.error(f"[Download] Failed to unpack archive {raw_filename} ({provider}:{sub_id})")
+            logger.error(
+                f"[Download] Failed to unpack archive '{raw_filename}' for {provider}:{sub_id} (target ep={target_ep})"
+            )
             raise HTTPException(status_code=502, detail="Failed to extract subtitle from archive")
+        logger.info(f"[Download] Upstream file '{raw_filename}' is direct subtitle, bypassing archive unpack.")
         sub_bytes, sub_name = archive_bytes, raw_filename
+    else:
+        logger.info(f"[Download] Extracted best candidate '{sub_name}' ({len(sub_bytes)} bytes) from archive.")
 
     # 4. Clean tags, remove ASS drawing/positioning codes, and normalize to UTF-8 SRT
+    logger.info(f"[Download] Normalizing '{sub_name}' ({len(sub_bytes)} bytes) to clean UTF-8 SRT...")
     cleaned_srt = SubtitleCleaner.normalize_to_utf8_srt(sub_bytes, sub_name)
+    cues_count = cleaned_srt.count(b"-->")
 
     # Validate that we actually produced valid SRT subtitle content
-    if len(cleaned_srt.strip()) < 20 or b"-->" not in cleaned_srt:
-        logger.error(f"[Download] Normalization yielded invalid SRT for {provider}:{sub_id}")
+    if len(cleaned_srt.strip()) < 20 or cues_count == 0:
+        logger.error(
+            f"[Download] Normalization yielded invalid SRT for {provider}:{sub_id} "
+            f"(len={len(cleaned_srt)}, cues={cues_count}, raw_file='{sub_name}')"
+        )
         raise HTTPException(status_code=502, detail="Subtitle extraction resulted in invalid SRT format")
+
+    logger.info(
+        f"[Download] Subtitle ready: {len(cleaned_srt)} bytes, {cues_count} cues. Saving to cache '{cache_filename}'."
+    )
 
     # 5. Save to disk cache for subsequent requests
     try:
         cache_manager.save_subtitle(cache_filename, cleaned_srt)
     except Exception as e:
         logger.error(f"[Download] Error caching {cache_filename}: {e}")
-
 
     # 6. Stream directly to Stremio player
     return Response(

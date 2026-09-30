@@ -93,6 +93,9 @@ class ZimukuBmpSolver:
         return best
 
 
+_unhealthy_domains: Dict[str, float] = {}
+
+
 class ZimukuProvider(BaseProvider):
     """Zimuku subtitle provider with mirror fallback and automated WAF bypass."""
 
@@ -102,7 +105,7 @@ class ZimukuProvider(BaseProvider):
         super().__init__(config)
         self.base_url = self.config.get("base_url", settings.ZIMUKU_BASE_URL)
         self.fallback_urls = self.config.get("fallback_urls", settings.ZIMUKU_FALLBACKS)
-        self.timeout = 6
+        self.timeout = 12
 
         if settings.UPSTREAM_PROXY:
             self.session.proxies.update({
@@ -110,12 +113,37 @@ class ZimukuProvider(BaseProvider):
                 "https": settings.UPSTREAM_PROXY
             })
 
+    @classmethod
+    def is_domain_healthy(cls, domain: str) -> bool:
+        """Check if a mirror domain is currently healthy or in cooldown."""
+        import time
+        return _unhealthy_domains.get(domain, 0) < time.time()
+
+    @classmethod
+    def mark_domain_unhealthy(cls, domain: str, cooldown_secs: int = 600):
+        """Put a failing or timed-out mirror domain into temporary cooldown."""
+        import time
+        _unhealthy_domains[domain] = time.time() + cooldown_secs
+        logger.warning(f"[Zimuku] Marking mirror {domain} as unhealthy for {cooldown_secs}s")
+
     def _fetch_page(self, url: str, referer: Optional[str] = None) -> Optional[requests.Response]:
         """GET request with automatic Yunsuo WAF bypass and JS redirect handling."""
+        parsed = urllib.parse.urlparse(url)
+        domain = f"{parsed.scheme}://{parsed.netloc}"
+        if not self.is_domain_healthy(domain):
+            return None
+
         headers = {"Referer": referer} if referer else {}
+        timeout = self.timeout if "zmk.pw" in domain else 4
+
         for _ in range(3):
             try:
-                resp = self.session.get(url, headers=headers, timeout=self.timeout)
+                resp = self.session.get(url, headers=headers, timeout=timeout)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"[Zimuku] GET {url} failed ({type(e).__name__}): {e}")
+                if "zmk.pw" not in domain:
+                    self.mark_domain_unhealthy(domain, cooldown_secs=600)
+                return None
             except Exception as e:
                 logger.warning(f"[Zimuku] GET {url} failed: {e}")
                 return None
@@ -135,7 +163,7 @@ class ZimukuProvider(BaseProvider):
                 if m:
                     redirect_url = m.group(1)
                     try:
-                        resp = self.session.get(redirect_url, headers={"Referer": url}, timeout=self.timeout)
+                        resp = self.session.get(redirect_url, headers={"Referer": url}, timeout=timeout)
                     except Exception:
                         pass
                 return resp
@@ -190,7 +218,12 @@ class ZimukuProvider(BaseProvider):
         if not search_queries:
             return []
 
-        all_endpoints = [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+        all_endpoints = [
+            d for d in [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+            if self.is_domain_healthy(d)
+        ]
+        if not all_endpoints:
+            all_endpoints = [self.base_url]
         candidates: List[SubtitleCandidate] = []
         seen_ids = set()
 
@@ -527,7 +560,12 @@ class ZimukuProvider(BaseProvider):
             f"{urllib.parse.urlparse(candidate.page_url).scheme}://{urllib.parse.urlparse(candidate.page_url).netloc}"
             if candidate.page_url else self.base_url
         )
-        all_domains = [orig_domain] + [u for u in [self.base_url] + self.fallback_urls if u != orig_domain]
+        all_domains = [
+            d for d in [orig_domain] + [u for u in [self.base_url] + self.fallback_urls if u != orig_domain]
+            if self.is_domain_healthy(d)
+        ]
+        if not all_domains:
+            all_domains = [orig_domain]
         path = urllib.parse.urlparse(candidate.page_url).path if candidate.page_url else f"/detail/{candidate.id}.html"
 
         for domain in all_domains:

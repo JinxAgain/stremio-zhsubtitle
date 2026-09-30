@@ -149,6 +149,7 @@ class SubtitleExtractor:
                             )
                     return None, ""
 
+                logger.info(f"[Extractor] Found {len(files_map)} subtitle files in ZIP archive: {list(files_map.keys())[:10]}")
                 best_name = cls.pick_best_file(
                     list(files_map.keys()),
                     episode=episode,
@@ -156,7 +157,10 @@ class SubtitleExtractor:
                     prefer_traditional=prefer_traditional
                 )
                 if best_name and best_name in files_map:
+                    logger.info(f"[Extractor] Selected best file '{best_name}' (target episode: {episode})")
                     return files_map[best_name], best_name
+                else:
+                    logger.warning(f"[Extractor] No suitable file picked from ZIP (target episode: {episode})")
         except Exception as e:
             logger.warning(f"ZIP unpack error: {e}")
 
@@ -297,6 +301,7 @@ class SubtitleExtractor:
                             )
 
                 if found_files:
+                    logger.info(f"[Extractor] Unpacked {len(found_files)} subtitle files from '{original_filename}': {list(found_files.keys())[:10]}")
                     best_name = cls.pick_best_file(
                         list(found_files.keys()),
                         episode=episode,
@@ -304,8 +309,13 @@ class SubtitleExtractor:
                         prefer_traditional=prefer_traditional
                     )
                     if best_name and best_name in found_files:
+                        logger.info(f"[Extractor] Selected best file '{best_name}' (target episode: {episode})")
                         with open(found_files[best_name], "rb") as sub_f:
                             return sub_f.read(), best_name
+                    else:
+                        logger.warning(f"[Extractor] No suitable file picked from '{original_filename}' (target episode: {episode})")
+                else:
+                    logger.warning(f"[Extractor] No subtitle files (.srt/.ass) found in '{original_filename}' after unpacking")
 
 
         except Exception as e:

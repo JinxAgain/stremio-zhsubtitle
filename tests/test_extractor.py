@@ -46,3 +46,33 @@ def test_zip_in_memory_extraction():
     )
     assert name == "S01E02.chs.srt"
     assert b"Episode 2" in content
+
+
+def test_is_episode_match_season_pack_vs_individual():
+    from app.providers.base import is_episode_match
+
+    # Season pack for Season 3 matches E04 as a pack
+    matched, is_pack = is_episode_match("The.Thick.Of.It.S03.1080p.AMZN.WEB-DL.DD2.0.x264-ARiN", season=3, episode=4)
+    assert matched is True
+    assert is_pack is True
+
+    # S03E07 should NOT match E04
+    matched, is_pack = is_episode_match("The Thick of It S03E07", season=3, episode=4)
+    assert matched is False
+    assert is_pack is False
+
+    # S03E04 should match E04 as non-pack
+    matched, is_pack = is_episode_match("The.Thick.of.It.S03E04.WEB-DL", season=3, episode=4)
+    assert matched is True
+    assert is_pack is False
+
+
+def test_zimuku_unhealthy_cooldown():
+    from app.providers.zimuku import ZimukuProvider
+
+    domain = "https://failing-test-mirror.com"
+    assert ZimukuProvider.is_domain_healthy(domain) is True
+
+    ZimukuProvider.mark_domain_unhealthy(domain, cooldown_secs=30)
+    assert ZimukuProvider.is_domain_healthy(domain) is False
+
