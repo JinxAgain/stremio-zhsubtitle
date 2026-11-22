@@ -197,3 +197,20 @@ This project was designed, developed, and tested with the assistance of Artifici
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+### Subtitle download compatibility
+
+Subtitle results use the short `/subtitles/dl/{provider}/{id}/{episode}.srt`
+URL; descriptive release and language tags remain in the label and filename
+metadata. Both short and legacy download routes support GET, HEAD and OPTIONS.
+HEAD resolves the same subtitle as GET (including fetching it on a cache miss),
+returns the same headers and sends no body.
+
+SubHD search can return matches even when its upstream download flow fails.
+Until that flow is repaired, results include SubHD candidates only when a
+validated, normalized subtitle for that episode already exists in this instance's
+disk cache. Uncached SubHD rows are omitted before ranking, including for
+SubHD-only configurations; those queries may return no subtitles. Listing does
+not pre-download SubHD candidates. This is a temporary availability mitigation,
+not a fix for the upstream downloader. Existing direct download URLs still work
+when the upstream provider is available. Zimuku downloads remain on demand.

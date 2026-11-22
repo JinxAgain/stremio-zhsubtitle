@@ -158,3 +158,12 @@ async def download_subtitle(provider: str, sub_id: str, episode_num: int, filena
             "Cache-Control": "public, max-age=86400",
         }
     )
+
+
+@router.head("/subtitles/dl/{provider}/{sub_id}/{episode_num}/{filename:path}")
+@router.head("/subtitles/dl/{provider}/{sub_id}/{episode_num}.srt")
+async def download_head(provider: str, sub_id: str, episode_num: int, filename: str = ""):
+    """Resolve exactly as GET, preserving status and headers without sending SRT bytes."""
+    response = await download_subtitle(provider, sub_id, episode_num, filename)
+    response.body = b""
+    return response

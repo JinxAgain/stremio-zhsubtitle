@@ -220,11 +220,11 @@ def extract_release_tags(cand_title: str) -> List[str]:
 def format_subtitle_info(cand: SubtitleCandidate, query: VideoQueryMeta) -> Tuple[str, str]:
     """
     Format subtitle label (for Stremio/Harbor UI matching OpenSubtitles v3 style)
-    and filename (for URL/MPV player track identification).
+    and filename metadata (download URLs use the short route).
     Returns:
         (label, filename)
         Example label:    "The End of Oak Street · WEB-DL · 1080p · x264 · [Bilingual SubHD]"
-        Example filename: "The.End.of.Oak.Street.2026.WEB-DL.1080p.x264.[Bilingual.SubHD].srt"
+        Example filename: "The.End.of.Oak.Street.2026.WEB-DL.1080p.x264.Bilingual.SubHD.srt"
     """
     prov_tag = "SubHD" if cand.provider.lower() == "subhd" else "Zimuku"
 
@@ -236,7 +236,7 @@ def format_subtitle_info(cand: SubtitleCandidate, query: VideoQueryMeta) -> Tupl
         lang_tag = "Chs"
 
     tag_bracket_space = f"[{lang_tag} {prov_tag}]"
-    tag_bracket_dot = f"[{lang_tag}.{prov_tag}]"
+    filename_tag = f"{lang_tag}.{prov_tag}"
 
     # Clean title
     clean_title = re.sub(r'[^A-Za-z0-9 ]', ' ', query.title or "Subtitle").strip()
@@ -266,7 +266,7 @@ def format_subtitle_info(cand: SubtitleCandidate, query: VideoQueryMeta) -> Tupl
     if ep_tag and ep_tag not in fn_parts:
         fn_parts.append(ep_tag)
     fn_parts.extend(tags)
-    fn_parts.append(tag_bracket_dot)
+    fn_parts.append(filename_tag)
     filename_body = ".".join(fn_parts)
     filename_body = re.sub(r"\.+", ".", filename_body).strip("._- ")
     if len(filename_body) > 120:
@@ -284,25 +284,20 @@ def format_subtitle_filename(cand: SubtitleCandidate, query: VideoQueryMeta) -> 
 
 
 def _is_cache_valid(items: Optional[List[Dict[str, Any]]], query_meta: VideoQueryMeta) -> bool:
-    """Check if cached subtitle items have the new clean ASCII filename and label structure."""
+    """Accept short download paths and discard legacy or unavailable cached rows."""
     if not items:
-        # If cache is empty, do not treat as valid if filename or title is present
-        if query_meta.filename or query_meta.title:
+        return not (query_meta.filename or query_meta.title)
+    for item in items:
+        if not item.get("label"):
             return False
-        return True
-    for it in items:
-        # Require rich label
-        if not it.get("label"):
+        match = re.fullmatch(
+            r"/subtitles/dl/(zimuku|subhd)/([A-Za-z0-9_-]+)/(\d+)\.srt",
+            item.get("path", ""),
+        )
+        if not match:
             return False
-        p = it.get("path", "")
-        parts = p.strip("/").split("/")
-        # Invalidate old format, digit.srt, or any path containing %-encoding or non-ASCII
-        if (
-            len(parts) < 5
-            or parts[-1] in ("0.srt", f"{query_meta.episode or 0}.srt")
-            or "%" in parts[-1]
-            or any(ord(c) > 127 for c in parts[-1])
-        ):
+        provider, sub_id, episode = match.groups()
+        if provider == "subhd" and not cache_manager.has_subtitle(f"subhd_{sub_id}_{episode}.srt"):
             return False
     return True
 
@@ -403,6 +398,16 @@ async def handle_subtitles_request(
             f"[Subtitles] Aggregated {len(candidates)} candidates ({subhd_count} SubHD, {zimuku_count} Zimuku)"
         )
 
+        # SubHD search succeeds even when its download flow is blocked. Until
+        # that flow is repaired, advertise only already-normalized cached files.
+        # Filter before ranking so unavailable rows cannot displace Zimuku hits.
+        ep_num = query_meta.episode if query_meta.episode is not None else 0
+        candidates = [
+            cand for cand in candidates
+            if cand.provider != "subhd"
+            or cache_manager.has_subtitle(f"subhd_{cand.id}_{ep_num}.srt")
+        ]
+
         # Rank and filter candidates
         ranked = SubtitleScorer.rank_candidates(
             candidates=candidates,
@@ -415,9 +420,8 @@ async def handle_subtitles_request(
         # Format Stremio subtitle payload with informative variant filenames and labels
         subtitles = []
         for cand in ranked:
-            ep_num = query_meta.episode if query_meta.episode is not None else 0
             sub_label, sub_filename = format_subtitle_info(cand, query_meta)
-            rel_path = f"/subtitles/dl/{cand.provider}/{cand.id}/{ep_num}/{sub_filename}"
+            rel_path = f"/subtitles/dl/{cand.provider}/{cand.id}/{ep_num}.srt"
             full_url = f"{base_url}{rel_path}"
 
             sub_item = {

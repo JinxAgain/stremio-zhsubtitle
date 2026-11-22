@@ -89,7 +89,8 @@ def test_format_subtitle_filename():
     query = VideoQueryMeta(imdb_id="tt1439629", media_type="series", season=1, episode=14, title="Community")
     label, fn = format_subtitle_info(cand, query)
 
-    assert "[Bilingual.SubHD]" in fn
+    assert "Bilingual.SubHD" in fn
+    assert "[" not in fn and "]" not in fn
     assert fn.endswith(".srt")
     assert "Community.S01E14" in fn
     assert "BluRay" in fn
@@ -113,7 +114,8 @@ def test_format_subtitle_filename():
         tags=SubtitleTags(bilingual=True)
     )
     fn_cn = format_subtitle_filename(cand_cn, query)
-    assert "[Bilingual.Zimuku]" in fn_cn
+    assert "Bilingual.Zimuku" in fn_cn
+    assert "[" not in fn_cn and "]" not in fn_cn
     assert "Community" in fn_cn
     assert "WEB-DL" in fn_cn
     assert "zip" not in fn_cn
